@@ -1,0 +1,30 @@
+# Xcode 工程由 XcodeGen 从这个文件生成：xcodegen generate
+# 改工程设置请改这里，不要在 Xcode 界面里改（重新生成时会被覆盖）
+name: MacKit
+options:
+  bundleIdPrefix: local.mackit
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+targets:
+  MacKit:
+    type: application
+    platform: macOS
+    scheme: {}
+    sources:
+      - path: MacKit
+    settings:
+      base:
+        PRODUCT_NAME: MacKit
+        PRODUCT_BUNDLE_IDENTIFIER: local.mackit.MacKit
+        INFOPLIST_FILE: MacKit/Resources/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        SWIFT_VERSION: "5.0"
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
+        ENABLE_APP_SANDBOX: NO
+        ENABLE_HARDENED_RUNTIME: NO
+        COMBINE_HIDPI_IMAGES: YES
+        DEBUG_INFORMATION_FORMAT: dwarf-with-dsym

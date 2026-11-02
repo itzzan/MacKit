@@ -1,0 +1,6 @@
+build/
+.DS_Store
+# Xcode 工程由 project.yml 生成
+MacKit.xcodeproj/
+# 本机私有设置（团队编号）
+Config/Local.xcconfig

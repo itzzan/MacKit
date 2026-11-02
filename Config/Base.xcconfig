@@ -1,0 +1,10 @@
+// 签名设置。默认是"临时签名"（每次重编都要重新给录屏权限）。
+// 装好 Xcode 并登录 Apple ID 后，把团队编号写进 Config/Local.xcconfig，
+// 就会改用 Apple Development 证书签名，新版本也能沿用同一个权限。
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = -
+DEVELOPMENT_TEAM =
+PROVISIONING_PROFILE_SPECIFIER =
+
+// 本机私有设置（团队编号属于个人信息，不进 git）
+#include? "Local.xcconfig"

@@ -1,0 +1,6 @@
+// 复制成 Config/Local.xcconfig 再填写。这个文件不进 git。
+// 团队编号在 Xcode → 设置 → Accounts 里能看到，也可以运行：
+//   security find-identity -v -p codesigning
+// 输出里 "Apple Development: 名字 (XXXXXXXXXX)" 括号里的就是。
+DEVELOPMENT_TEAM = XXXXXXXXXX
+CODE_SIGN_IDENTITY = Apple Development
