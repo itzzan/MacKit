@@ -128,5 +128,40 @@ check(ClipboardText.relativeTime(now.addingTimeInterval(-20 * 3600), now: now, c
 check(ClipboardText.relativeTime(cal.date(from: DateComponents(year: 2026, month: 10, day: 28, hour: 9))!, now: now, calendar: cal) == "10-28",
       "更早 → 月-日")
 
+// 台阶 5：录屏的坐标和尺寸
+check(RecordGeometry.sourceRect(forViewRect: CGRect(x: 100, y: 100, width: 200, height: 100), screenHeight: 982)
+      == CGRect(x: 100, y: 782, width: 200, height: 100), "框选区域 → 录制区域（左上原点）")
+check(RecordGeometry.alignedSourceRect(CGRect(x: 10.3, y: 20.6, width: 100.7, height: 50.3), scale: 2,
+                                       screenSize: CGSize(width: 1512, height: 982))
+      == CGRect(x: 10.5, y: 20.5, width: 100, height: 50), "录制区域对齐到整像素，像素宽高是偶数")
+check(RecordGeometry.alignedSourceRect(CGRect(x: 1500, y: 970, width: 100, height: 100), scale: 2,
+                                       screenSize: CGSize(width: 1512, height: 982))
+      == CGRect(x: 1412, y: 882, width: 100, height: 100), "录制区域超出屏幕 → 挪回屏幕里")
+check(RecordGeometry.outputSize(pixelWidth: 3025, pixelHeight: 1965, quality: .original60) == (3024, 1964),
+      "原始清晰度：像素宽高取偶数")
+check(RecordGeometry.outputSize(pixelWidth: 3024, pixelHeight: 1964, quality: .hd30) == (1662, 1080),
+      "1080p 档：Retina 全屏缩到 1080 高（不会算成 1078）")
+check(RecordGeometry.outputSize(pixelWidth: 1000, pixelHeight: 2000, quality: .hd30) == (960, 1920), "1080p 档：竖着的画面缩到 1920 高")
+check(RecordGeometry.outputSize(pixelWidth: 800, pixelHeight: 600, quality: .hd30) == (800, 600), "1080p 档：小区域不放大")
+check(RecordQuality.original60.fps == 60 && RecordQuality.hd30.fps == 30, "两档画质的帧率")
+check(RecordGeometry.durationText(0) == "00:00" && RecordGeometry.durationText(42) == "00:42"
+      && RecordGeometry.durationText(723) == "12:03" && RecordGeometry.durationText(3723) == "1:02:03", "菜单栏时长显示")
+let recDate = Calendar.current.date(from: DateComponents(year: 2026, month: 11, day: 4, hour: 15, minute: 20, second: 33))!
+check(RecordGeometry.fileName(for: recDate) == "MacKit_录屏_2026-11-04_15-20-33.mp4", "录屏文件名")
+
+// 录制小条放哪（2026-11-04 验收后加：只有菜单栏红点，常常不知道在不在录）
+let vis = CGRect(x: 0, y: 0, width: 1728, height: 1084)
+let hud = CGSize(width: 220, height: 36)
+check(RecordGeometry.hudOrigin(size: hud, target: CGRect(x: 0, y: 0, width: 1728, height: 1117), visible: vis, fullScreen: true)
+      == CGPoint(x: 754, y: 1036), "录整屏：小条在屏幕顶部正中")
+check(RecordGeometry.hudOrigin(size: hud, target: CGRect(x: 400, y: 300, width: 600, height: 400), visible: vis, fullScreen: false)
+      == CGPoint(x: 780, y: 712), "录一块区域：小条在区域右上角外面")
+check(RecordGeometry.hudOrigin(size: hud, target: CGRect(x: 400, y: 600, width: 600, height: 470), visible: vis, fullScreen: false)
+      == CGPoint(x: 780, y: 552), "区域贴着屏幕顶 → 小条放下面")
+check(RecordGeometry.hudOrigin(size: hud, target: CGRect(x: 0, y: 0, width: 1728, height: 1084), visible: vis, fullScreen: false)
+      == CGPoint(x: 1504, y: 1036), "区域占满屏幕 → 小条放在区域里的右上角")
+check(RecordGeometry.hudOrigin(size: hud, target: CGRect(x: 10, y: 300, width: 100, height: 100), visible: vis, fullScreen: false).x == 4,
+      "区域很窄靠左 → 小条不出屏幕")
+
 print(failures == 0 ? "UNIT TESTS OK" : "UNIT TESTS FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)

@@ -92,6 +92,17 @@ enum ClipboardHotKeyPresets {
     ]
 }
 
+/// 录屏快捷键。第一个是默认值（2026-11-04 用户选的 ⌘4）
+enum RecordHotKeyPresets {
+    static let all: [HotKeyCombo] = [
+        HotKeyCombo(keyCode: UInt32(kVK_ANSI_4), carbonModifiers: UInt32(cmdKey),
+                    display: "⌘4", menuKey: "4", menuModifiers: [.command], note: "接着 ⌘1 ⌘2 ⌘3"),
+        HotKeyCombo(keyCode: UInt32(kVK_ANSI_R), carbonModifiers: UInt32(controlKey | optionKey),
+                    display: "⌃⌥R", menuKey: "r", menuModifiers: [.control, .option], note: "QQ 录屏习惯",
+                    rival: ("com.tencent.qq", "QQ")),
+    ]
+}
+
 /// 用户设置，存在 UserDefaults（defaults read local.mackit.MacKit 可查看）
 @MainActor
 enum Settings {
@@ -171,6 +182,42 @@ enum Settings {
     static var askedAccessibility: Bool {
         get { store.bool(forKey: "permission.askedAccessibility") }
         set { store.set(newValue, forKey: "permission.askedAccessibility") }
+    }
+
+    static var recordHotKeyIndex: Int {
+        get {
+            let index = store.integer(forKey: "record.hotkeyIndex")
+            return RecordHotKeyPresets.all.indices.contains(index) ? index : 0
+        }
+        set { store.set(newValue, forKey: "record.hotkeyIndex") }
+    }
+
+    static var recordHotKey: HotKeyCombo { RecordHotKeyPresets.all[recordHotKeyIndex] }
+
+    static var recordSystemAudio: Bool {
+        get { store.object(forKey: "record.systemAudio") as? Bool ?? true }
+        set { store.set(newValue, forKey: "record.systemAudio") }
+    }
+
+    static var recordMicrophone: Bool {
+        get { store.bool(forKey: "record.microphone") }
+        set { store.set(newValue, forKey: "record.microphone") }
+    }
+
+    static var recordQuality: RecordQuality {
+        get { RecordQuality(rawValue: store.integer(forKey: "record.quality")) ?? .original60 }
+        set { store.set(newValue.rawValue, forKey: "record.quality") }
+    }
+
+    static let defaultRecordFolder = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Movies/MacKit", isDirectory: true)
+
+    static var recordFolder: URL {
+        get {
+            if let path = store.string(forKey: "record.folder") { return URL(fileURLWithPath: path, isDirectory: true) }
+            return defaultRecordFolder
+        }
+        set { store.set(newValue.path, forKey: "record.folder") }
     }
 
     static var askedScreenPermission: Bool {

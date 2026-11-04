@@ -25,7 +25,7 @@ final class ScreenshotTool: ToolModule {
 
     /// delay：从菜单点进来时等菜单收起，免得把菜单也截进去
     func startSelection(delay: Double = 0) {
-        guard session == nil, !isPreparing else { return }
+        guard session == nil, !isPreparing, SelectionSession.active == nil else { return }
         guard ScreenPermission.readyToTry() else { return }
         isPreparing = true
         Task { @MainActor in
@@ -75,7 +75,7 @@ final class ScreenshotTool: ToolModule {
         case .saved(let url):
             Log.capture.notice("saved as \(url.path, privacy: .public)")
             Toast.show("✓ 已保存：\(url.lastPathComponent)")
-        case .cancelled:
+        case .record, .cancelled:
             break
         }
     }

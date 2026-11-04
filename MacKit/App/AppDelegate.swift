@@ -20,7 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let screenshot = ScreenshotTool()
     private let pin = PinTool()
     private let clipboard = ClipboardTool()
-    private lazy var modules: [ToolModule] = [screenshot, pin, clipboard]
+    private let recorder = RecorderTool()
+    private lazy var modules: [ToolModule] = [screenshot, pin, clipboard, recorder]
     private(set) var emergencyQuitRegistered = false
 
     init(selfTest: Bool) {
@@ -29,6 +30,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 录屏冒烟测试：不建菜单栏、不注册快捷键，录完就退出
+        if let i = CommandLine.arguments.firstIndex(of: "--record-smoke"), CommandLine.arguments.indices.contains(i + 1) {
+            RecordSmokeTest.run(resultPath: CommandLine.arguments[i + 1])
+            return
+        }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
             let image = NSImage(systemSymbolName: "wrench.and.screwdriver", accessibilityDescription: "MacKit")
@@ -43,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         screenshot.onPin = { [weak self] result in self?.pin.pin(result) }
         clipboard.onPin = { [weak self] pb in self?.pin.pinFromPasteboard(pb) }
+        recorder.onIndicator = { [weak self] text in self?.showRecordingIndicator(text) }
         for module in modules { module.activate() }
         emergencyQuitRegistered = HotKeyCenter.shared.register(EmergencyHotKey.quit) {
             Log.app.notice("emergency quit")
@@ -50,7 +57,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } != nil
         Log.app.notice("MacKit \(AppInfo.version, privacy: .public) launched")
 
-        if selfTest { SelfTest.run(statusItem: item, screenshot: screenshot, pin: pin, emergencyQuit: emergencyQuitRegistered) }
+        if selfTest {
+            SelfTest.run(statusItem: item, screenshot: screenshot, pin: pin, recorder: recorder, emergencyQuit: emergencyQuitRegistered)
+        }
+    }
+
+    /// 录屏中：菜单栏图标换成红点，旁边显示时长；nil = 换回扳手
+    private func showRecordingIndicator(_ text: String?) {
+        guard let button = statusItem?.button else { return }
+        if let text {
+            statusItem?.length = NSStatusItem.variableLength
+            let config = NSImage.SymbolConfiguration(paletteColors: [.systemRed])
+            button.image = NSImage(systemSymbolName: "record.circle.fill", accessibilityDescription: "正在录屏")?
+                .withSymbolConfiguration(config)
+            button.image?.isTemplate = false
+            button.imagePosition = .imageLeading
+            button.title = " " + text
+            button.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        } else {
+            let image = NSImage(systemSymbolName: "wrench.and.screwdriver", accessibilityDescription: "MacKit")
+            image?.isTemplate = true
+            button.image = image
+            button.title = ""
+            statusItem?.length = NSStatusItem.squareLength
+        }
     }
 
     /// 每次点开菜单都重新生成，这样设置改了马上能看到

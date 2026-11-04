@@ -6,10 +6,10 @@ final class ToolbarButton: NSButton {
     private let handler: @MainActor () -> Void
     var isSelectedLook = false { didSet { refreshLook() } }
 
-    init(symbol: String? = nil, title: String? = nil, tip: String, size: CGFloat = 28,
+    init(symbol: String? = nil, title: String? = nil, tip: String, size: CGFloat = 28, width: CGFloat? = nil,
          handler: @escaping @MainActor () -> Void) {
         self.handler = handler
-        super.init(frame: CGRect(x: 0, y: 0, width: size, height: size))
+        super.init(frame: CGRect(x: 0, y: 0, width: width ?? size, height: size))
         if let symbol, let image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip) {
             self.image = image.withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
             imagePosition = .imageOnly
@@ -27,13 +27,25 @@ final class ToolbarButton: NSButton {
         wantsLayer = true
         layer?.cornerRadius = 6
         translatesAutoresizingMaskIntoConstraints = false
-        widthAnchor.constraint(equalToConstant: size).isActive = true
+        widthAnchor.constraint(equalToConstant: width ?? size).isActive = true
         heightAnchor.constraint(equalToConstant: size).isActive = true
+        if let symbol, let title, let image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip) {
+            self.image = image.withSymbolConfiguration(.init(pointSize: 13, weight: .semibold))
+            imagePosition = .imageLeading
+            self.attributedTitle = NSAttributedString(string: " " + title, attributes: [
+                .font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: NSColor.white])
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("not supported") }
 
     @MainActor @objc private func fire() { handler() }
+
+    func setSymbol(_ symbol: String, tip: String) {
+        image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)?
+            .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
+        toolTip = tip
+    }
 
     private func refreshLook() {
         layer?.backgroundColor = isSelectedLook ? NSColor.white.withAlphaComponent(0.28).cgColor : nil

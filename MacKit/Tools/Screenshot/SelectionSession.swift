@@ -12,6 +12,7 @@ enum SelectionOutcome {
     case copy(SelectionResult)       // 完成：复制并保存
     case pin(SelectionResult)        // 钉成贴图
     case saved(URL)                  // 另存为
+    case record(RecordTarget)        // 录屏：选好了要录哪里
     case cancelled
 }
 
@@ -66,16 +67,23 @@ final class SelectionSession {
 
     var onFinish: ((SelectionOutcome) -> Void)?
 
+    /// 截图（选完进标注）还是录屏（选完就交出要录哪里）
+    enum Purpose { case screenshot, record }
+
     private struct ScreenUI {
         let frozen: FrozenScreen
         let overlay: OverlayWindow
         let container: NSView
         let view: SelectionView
+        /// 这块屏幕上每个可选窗口在 windowFrames 里的序号
+        let windowSources: [Int]
     }
 
     private let screens: [FrozenScreen]
     private let windowFrames: [CGRect]
     private let quickMode: Bool
+    private let windowIDs: [CGWindowID]
+    let purpose: Purpose
     private var ui: [ScreenUI] = []
     private var editing: (screen: ScreenUI, editor: AnnotationEditor, mosaic: MosaicSource)?
     /// 保存窗口开着：这期间 ⌘2、Esc、完成都不响应
@@ -83,11 +91,16 @@ final class SelectionSession {
 
     var isEditing: Bool { editing != nil }
 
-    init(screens: [FrozenScreen], windowFrames: [CGRect], quickMode: Bool) {
+    init(screens: [FrozenScreen], windowFrames: [CGRect], quickMode: Bool,
+         windowIDs: [CGWindowID] = [], purpose: Purpose = .screenshot) {
         self.screens = screens
         self.windowFrames = windowFrames
         self.quickMode = quickMode
+        self.windowIDs = windowIDs
+        self.purpose = purpose
     }
+
+    private static let recordHint = "选择要录制的区域　·　单击录一个窗口　·　桌面上单击 = 录整屏　·　Esc 或右键取消"
 
     func begin() {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
@@ -96,13 +109,21 @@ final class SelectionSession {
 
         for (index, frozen) in screens.enumerated() {
             let frame = frozen.screen.frame
-            let rects = Geometry.viewRects(forCGWindowFrames: windowFrames, screenFrame: frame,
-                                           primaryHeight: primaryHeight)
+            var rects: [CGRect] = []
+            var sources: [Int] = []
+            for (i, windowFrame) in windowFrames.enumerated() {
+                if let r = Geometry.viewRects(forCGWindowFrames: [windowFrame], screenFrame: frame,
+                                              primaryHeight: primaryHeight).first {
+                    rects.append(r)
+                    sources.append(i)
+                }
+            }
             let bounds = NSRect(origin: .zero, size: frame.size)
             let container = NSView(frame: bounds)
             container.wantsLayer = true
             let view = SelectionView(frame: bounds, image: frozen.image, windowRects: rects,
-                                     scale: frozen.screen.backingScaleFactor)
+                                     scale: frozen.screen.backingScaleFactor,
+                                     hint: purpose == .record ? Self.recordHint : nil)
             view.autoresizingMask = [.width, .height]
             container.addSubview(view)
 
@@ -113,7 +134,7 @@ final class SelectionSession {
 
             let overlay = OverlayWindow(frame: frame)
             overlay.contentView = container
-            ui.append(ScreenUI(frozen: frozen, overlay: overlay, container: container, view: view))
+            ui.append(ScreenUI(frozen: frozen, overlay: overlay, container: container, view: view, windowSources: sources))
             if NSMouseInRect(mouse, frame, false) { keyIndex = index }
         }
 
@@ -133,6 +154,11 @@ final class SelectionSession {
     private func selected(_ rect: CGRect, onScreen index: Int) {
         guard ui.indices.contains(index), editing == nil else { return }
         let screen = ui[index]
+        if purpose == .record {
+            end(.record(Self.recordTarget(rect: rect, picked: screen.view.pickedWindowIndex, screen: screen.frozen.screen,
+                                          sources: screen.windowSources, windowFrames: windowFrames, windowIDs: windowIDs)))
+            return
+        }
         if quickMode {
             if let result = Self.crop(image: screen.frozen.image, viewSize: screen.view.bounds.size, rect: rect,
                                       screenOrigin: screen.frozen.screen.frame.origin) {
@@ -153,6 +179,25 @@ final class SelectionSession {
         for other in ui where other.view !== screen.view { other.view.goIdle() }
         screen.overlay.makeKey()
         screen.overlay.makeFirstResponder(screen.view)
+    }
+
+    /// 选定的框 → 要录哪里：单击了窗口 = 录窗口；框住整块屏幕 = 录整屏；否则录这一块
+    static func recordTarget(rect: CGRect, picked: Int?, screen: NSScreen, sources: [Int],
+                             windowFrames: [CGRect], windowIDs: [CGWindowID]) -> RecordTarget {
+        let displayID = screen.displayID ?? CGMainDisplayID()
+        if let picked, sources.indices.contains(picked) {
+            let src = sources[picked]
+            if windowIDs.indices.contains(src), windowIDs[src] != 0 {
+                let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
+                return .window(id: windowIDs[src],
+                               globalFrame: Geometry.cocoaRect(fromCG: windowFrames[src], primaryHeight: primaryHeight))
+            }
+        }
+        let bounds = CGRect(origin: .zero, size: screen.frame.size)
+        if abs(rect.width - bounds.width) < 1 && abs(rect.height - bounds.height) < 1 {
+            return .display(id: displayID, screenFrame: screen.frame)
+        }
+        return .region(id: displayID, screenFrame: screen.frame, viewRect: rect)
     }
 
     /// 冻住的画面 + 标注 → 最终图片

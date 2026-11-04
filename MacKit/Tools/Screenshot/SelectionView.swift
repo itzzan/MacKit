@@ -21,6 +21,9 @@ final class SelectionView: NSView {
 
     /// 当前显示的框（悬停高亮、拖动中、或编辑中的选区）
     var currentSelection: CGRect? { selection }
+    /// 最近一次选定时，选的是 windowRects 里的第几个窗口（拖动框选、桌面单击时为 nil）
+    private(set) var pickedWindowIndex: Int?
+    private var hoverWindowIndex: Int?
 
     private let image: CGImage
     private let windowRects: [CGRect]
@@ -48,7 +51,7 @@ final class SelectionView: NSView {
     private static let accent = NSColor(srgbRed: 0.12, green: 0.56, blue: 1.0, alpha: 1).cgColor
     private static let hint = "拖动框选区域　·　单击选窗口（桌面上单击 = 整屏）　·　回车确认　·　Esc 或右键取消"
 
-    init(frame: NSRect, image: CGImage, windowRects: [CGRect], scale: CGFloat) {
+    init(frame: NSRect, image: CGImage, windowRects: [CGRect], scale: CGFloat, hint: String? = nil) {
         self.image = image
         self.windowRects = windowRects
         self.scale = scale
@@ -88,7 +91,7 @@ final class SelectionView: NSView {
         root.addSublayer(sizeLabel)
         root.addSublayer(hintLabel)
 
-        let hintSize = hintLabel.set(Self.hint, scale: scale)
+        let hintSize = hintLabel.set(hint ?? Self.hint, scale: scale)
         hintLabel.frame = CGRect(x: bounds.midX - hintSize.width / 2, y: bounds.maxY - 90,
                                  width: hintSize.width, height: hintSize.height)
         updateLayers()
@@ -157,7 +160,8 @@ final class SelectionView: NSView {
     }
 
     private func hoverRect(at point: CGPoint) -> CGRect {
-        Geometry.topRect(containing: point, in: windowRects) ?? bounds
+        hoverWindowIndex = windowRects.firstIndex { $0.contains(point) }
+        return Geometry.topRect(containing: point, in: windowRects) ?? bounds
     }
 
     /// 刚弹出覆盖层时，按鼠标位置先高亮一次
@@ -303,13 +307,16 @@ final class SelectionView: NSView {
         case .choose(let start, let moved):
             if moved {
                 if let sel = selection, sel.width >= 2, sel.height >= 2 {
+                    pickedWindowIndex = nil
                     onSelect?(sel)
                 } else {
                     selection = hoverRect(at: p)
                     updateLayers()
                 }
             } else {
-                onSelect?(hoverRect(at: start))      // 单击 = 选中鼠标下的窗口或整屏
+                let rect = hoverRect(at: start)      // 单击 = 选中鼠标下的窗口或整屏
+                pickedWindowIndex = hoverWindowIndex
+                onSelect?(rect)
             }
         case .draw:
             editor?.mouseUp(at: p)
@@ -329,7 +336,10 @@ final class SelectionView: NSView {
         if code == 53 { onCancel?(); return }                         // Esc
         switch mode {
         case .choosing:
-            if code == 36 || code == 76, let sel = selection { onSelect?(sel) }   // 回车
+            if code == 36 || code == 76, let sel = selection {                    // 回车
+                pickedWindowIndex = hoverWindowIndex
+                onSelect?(sel)
+            }
             else { super.keyDown(with: event) }
         case .editing:
             guard let editor, let sel = selection else { return }

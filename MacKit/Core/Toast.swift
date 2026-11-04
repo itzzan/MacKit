@@ -6,7 +6,8 @@ enum Toast {
     private static var panel: NSPanel?
     private static var generation = 0
 
-    static func show(_ text: String, seconds: Double = 1.8) {
+    /// action 不为空时提示条能点：点一下执行 action 并收起
+    static func show(_ text: String, seconds: Double = 1.8, action: (@MainActor () -> Void)? = nil) {
         panel?.orderOut(nil)
 
         let label = NSTextField(labelWithString: text)
@@ -24,13 +25,14 @@ enum Toast {
         p.backgroundColor = .clear
         p.hasShadow = true
         p.level = .statusBar
-        p.ignoresMouseEvents = true
+        p.ignoresMouseEvents = action == nil
         p.canHide = false            // 截完图会把焦点还给原来的软件，提示不能跟着消失
         p.hidesOnDeactivate = false
         p.isReleasedWhenClosed = false
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
 
-        let bg = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
+        let bg = ToastBackground(frame: NSRect(origin: .zero, size: size))
+        bg.onClick = action.map { act in { act(); p.orderOut(nil) } }
         bg.material = .hudWindow
         bg.blendingMode = .behindWindow
         bg.state = .active
@@ -68,3 +70,16 @@ enum Toast {
         }
     }
 }
+
+/// 提示条的底：能点的时候点一下执行动作
+@MainActor
+final class ToastBackground: NSVisualEffectView {
+    var onClick: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) { onClick?() }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func resetCursorRects() {
+        if onClick != nil { addCursorRect(bounds, cursor: .pointingHand) }
+    }
+}
+

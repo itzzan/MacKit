@@ -1,4 +1,6 @@
 import AppKit
+import AVFoundation
+import CoreMedia
 
 /// 自检：MacKit --selftest
 /// 不弹窗、不碰剪贴板、不截真实屏幕，用假图片把"选区 → 裁剪 → 存文件"走一遍
@@ -13,7 +15,8 @@ enum SelfTest {
 
     private static func info(_ text: String) { print("INFO", text) }
 
-    static func run(statusItem: NSStatusItem, screenshot: ScreenshotTool, pin: PinTool, emergencyQuit: Bool) {
+    static func run(statusItem: NSStatusItem, screenshot: ScreenshotTool, pin: PinTool, recorder: RecorderTool,
+                    emergencyQuit: Bool) {
         check(statusItem.button?.image != nil, "菜单栏图标已创建")
         check(emergencyQuit, "紧急退出快捷键 \(EmergencyHotKey.quit.display) 已注册")
         info("截图快捷键 \(Settings.screenshotHotKey.display) 注册\(screenshot.hotKeyRegistered ? "成功" : "失败")")
@@ -38,6 +41,7 @@ enum SelfTest {
         testTextEditing()
         testPinAnnotation()
         testClipboard()
+        testRecorder(recorder)
 
         print(failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED (\(failures))")
         exit(failures == 0 ? 0 : 1)
@@ -747,6 +751,96 @@ enum SelfTest {
         check(thumb != nil && (thumb?.size.width ?? 99) <= 48, "图片在列表里显示成小缩略图")
     }
 
+    // MARK: 录屏（台阶 5）。真的录屏要弹系统窗口、占屏幕，不在这里做；这里测"录哪里、怎么录"算得对不对
+
+    private static func testRecorder(_ tool: RecorderTool) {
+        check(tool.state == .idle && tool.hotKeyRegistered, "录屏快捷键 \(Settings.recordHotKey.display) 已注册，平时是空闲状态")
+        check(Bundle.main.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") != nil,
+              "App 里写明了麦克风用途（没写的话一要麦克风权限就会闪退）")
+        let titles = tool.menuItems().map(\.title)
+        check(titles.contains { $0.hasPrefix("录屏（") } && titles.contains("录屏画质") && titles.contains("录屏保存位置"),
+              "菜单里有录屏、画质、保存位置")
+
+        // 选区 → 录哪里
+        guard let screen = NSScreen.main else { check(false, "有屏幕"); return }
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
+        let windowCG = CGRect(x: 100, y: 100, width: 400, height: 300)
+        let picked = SelectionSession.recordTarget(rect: .zero, picked: 0, screen: screen, sources: [2],
+                                                   windowFrames: [.zero, .zero, windowCG], windowIDs: [0, 0, 777])
+        check(picked == .window(id: 777, globalFrame: Geometry.cocoaRect(fromCG: windowCG, primaryHeight: primaryHeight)),
+              "单击了窗口 → 录这个窗口")
+        let whole = SelectionSession.recordTarget(rect: CGRect(origin: .zero, size: screen.frame.size), picked: nil, screen: screen,
+                                                  sources: [], windowFrames: [], windowIDs: [])
+        if case .display = whole { check(true, "桌面上单击（整块屏幕）→ 录整屏") } else { check(false, "桌面上单击 → 录整屏") }
+        let part = CGRect(x: 100, y: 100, width: 300, height: 200)
+        let region = SelectionSession.recordTarget(rect: part, picked: nil, screen: screen, sources: [], windowFrames: [], windowIDs: [])
+        if case .region(_, _, let r) = region, r == part, region.globalFrame == part.offsetBy(dx: screen.frame.minX, dy: screen.frame.minY) {
+            check(true, "拖动框选 → 录这一块")
+        } else { check(false, "拖动框选 → 录这一块") }
+
+        // 选区视图记下单击的是哪个窗口
+        let image = makeTestImage(width: 3024, height: 1964)
+        let view = SelectionView(frame: CGRect(x: 0, y: 0, width: 1512, height: 982), image: image,
+                                 windowRects: [CGRect(x: 300, y: 300, width: 400, height: 200)], scale: 2, hint: "录屏")
+        var chosen = 0
+        view.onSelect = { _ in chosen += 1 }
+        view.mouseDown(with: mouse(.leftMouseDown, 400, 400)); view.mouseUp(with: mouse(.leftMouseUp, 400, 400))
+        check(chosen == 1 && view.pickedWindowIndex == 0, "单击窗口：记下选的是这个窗口")
+        view.mouseDown(with: mouse(.leftMouseDown, 100, 100))
+        view.mouseDragged(with: mouse(.leftMouseDragged, 150, 150))
+        view.mouseUp(with: mouse(.leftMouseUp, 200, 200))
+        check(chosen == 2 && view.pickedWindowIndex == nil, "拖动框选：不算选了窗口")
+        view.mouseDown(with: mouse(.leftMouseDown, 1200, 900)); view.mouseUp(with: mouse(.leftMouseUp, 1200, 900))
+        check(chosen == 3 && view.pickedWindowIndex == nil, "桌面上单击：不算选了窗口")
+
+        // 录制参数
+        let screenFrame = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let regionTarget = RecordTarget.region(id: 1, screenFrame: screenFrame, viewRect: CGRect(x: 100, y: 100, width: 401, height: 301))
+        let plan = ScreenRecorder.plan(for: regionTarget, quality: .original60, scale: 2, contentSize: screenFrame.size)
+        check(plan == RecordPlan(sourceRect: CGRect(x: 100, y: 581, width: 401, height: 301), width: 802, height: 602, fps: 60),
+              "录一块区域：只取框里那块，原始清晰度 802×602、每秒 60 帧")
+        let full = ScreenRecorder.plan(for: .display(id: 1, screenFrame: screenFrame), quality: .original60, scale: 2,
+                                       contentSize: screenFrame.size)
+        check(full.sourceRect == nil && full.width == 3024 && full.height == 1964, "录整屏：Retina 原始 3024×1964")
+        let small = ScreenRecorder.plan(for: .display(id: 1, screenFrame: screenFrame), quality: .hd30, scale: 2,
+                                        contentSize: screenFrame.size)
+        check(small.width == 1662 && small.height == 1080 && small.fps == 30, "1080p 档：缩到 1662×1080、每秒 30 帧")
+        let win = ScreenRecorder.plan(for: .window(id: 7, globalFrame: .zero), quality: .original60, scale: 2,
+                                      contentSize: CGSize(width: 801, height: 600))
+        check(win.sourceRect == nil && win.width == 1602 && win.height == 1200, "录窗口：按窗口大小，像素是偶数")
+
+        let config = ScreenRecorder.configuration(plan: plan, options: RecordOptions(systemAudio: true, microphone: false,
+                                                                                      quality: .original60))
+        check(config.width == 802 && config.height == 602 && config.sourceRect == plan.sourceRect
+              && config.minimumFrameInterval == CMTime(value: 1, timescale: 60), "录制设置：尺寸、区域、帧率")
+        check(config.capturesAudio && config.excludesCurrentProcessAudio && !config.captureMicrophone && config.showsCursor,
+              "录制设置：录系统声音、不录 MacKit 自己的声音、麦克风关、显示鼠标")
+        let withMic = ScreenRecorder.configuration(plan: plan, options: RecordOptions(systemAudio: false, microphone: true,
+                                                                                       quality: .hd30))
+        check(!withMic.capturesAudio && withMic.captureMicrophone, "控制条里关系统声音、开麦克风 → 设置跟着变")
+
+        // 录制前后的界面（只造不显示）
+        let bar = RecordingControlBar(systemAudio: true, microphone: false)
+        check(bar.buttons.count == 4 && bar.systemAudio && !bar.microphone, "控制条：系统声音、麦克风、开始、取消四个按钮")
+        let region2 = CGRect(x: 200, y: 200, width: 300, height: 200)
+        let border = RecordingBorderWindow(region: region2)
+        check(border.panel.frame == region2.insetBy(dx: -6, dy: -6) && border.panel.ignoresMouseEvents,
+              "红色虚线框画在区域外面、鼠标能穿过去，不会录进画面")
+        let hud = RecordingHUD(systemAudio: true, microphone: true)
+        var stopped = 0
+        hud.onStop = { stopped += 1 }
+        hud.update("00:42")
+        hud.stopButton.performClick(nil)
+        check(hud.timeText == "00:42" && stopped == 1 && hud.panel.frame.width > 150 && hud.panel.frame.height >= 36,
+              "录制小条：显示时长，点「停止」就停（\(Int(hud.panel.frame.width))×\(Int(hud.panel.frame.height)) 点）")
+        check(hud.panel.isMovableByWindowBackground && !hud.panel.canHide, "录制小条能拖走，MacKit 藏起来时它还在")
+        var indicator: String? = "x"
+        tool.onIndicator = { indicator = $0 }
+        tool.reset()
+        check(tool.state == .idle && indicator == nil, "取消录屏：回到空闲，菜单栏图标换回扳手")
+        tool.onIndicator = nil
+    }
+
     // MARK: 工具
 
     private static func key(_ chars: String, code: UInt16, mods: NSEvent.ModifierFlags = []) -> NSEvent {
@@ -803,3 +897,74 @@ enum SelfTest {
         return (Int(bytes[0]), Int(bytes[1]), Int(bytes[2]))
     }
 }
+
+/// 录屏冒烟测试：MacKit --record-smoke <结果文件>
+/// 真的录三次（不弹任何窗口、不开麦克风）：屏幕左上角一小块 2 秒、最前面的一个窗口 1.5 秒、整屏 1.5 秒。
+/// 检查生成的 mp4 能不能读、尺寸时长对不对，然后删掉视频。要用 open 启动（这样"录屏权限"算在 MacKit 头上）
+@MainActor
+enum RecordSmokeTest {
+    static func run(resultPath: String) {
+        Task { @MainActor in
+            var lines: [String] = []
+            var allOK = true
+            guard let screen = NSScreen.screens.first, let id = screen.displayID else { finish(["没有屏幕"], false, resultPath); return }
+            let scale = screen.backingScaleFactor
+
+            let viewRect = CGRect(x: 40, y: screen.frame.height - 40 - 150, width: 200, height: 150)
+            let r1 = await record(.region(id: id, screenFrame: screen.frame, viewRect: viewRect), seconds: 2)
+            lines.append("区域：" + r1.text)
+            allOK = allOK && r1.ok && r1.size == CGSize(width: 200 * scale, height: 150 * scale) && r1.audio == 1
+
+            if let w = WindowList.current().first(where: { $0.frame.width >= 200 && $0.frame.height >= 150 }) {
+                let r2 = await record(.window(id: w.id, globalFrame: .zero), seconds: 1.5)
+                lines.append("窗口：" + r2.text + "（窗口 \(Int(w.frame.width))×\(Int(w.frame.height)) 点）")
+                let expect = CGSize(width: CGFloat(Int(w.frame.width * scale) / 2 * 2), height: CGFloat(Int(w.frame.height * scale) / 2 * 2))
+                allOK = allOK && r2.ok && abs(r2.size.width - expect.width) <= 2 && abs(r2.size.height - expect.height) <= 2
+            } else {
+                lines.append("窗口：没有可录的窗口，跳过")
+            }
+
+            let r3 = await record(.display(id: id, screenFrame: screen.frame), seconds: 1.5)
+            lines.append("整屏：" + r3.text)
+            allOK = allOK && r3.ok && r3.size == CGSize(width: screen.frame.width * scale, height: screen.frame.height * scale)
+            finish(lines, allOK, resultPath)
+        }
+    }
+
+    private static func finish(_ lines: [String], _ ok: Bool, _ path: String) {
+        try? (lines + [ok ? "SMOKE OK" : "SMOKE FAILED"]).joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        exit(ok ? 0 : 1)
+    }
+
+    private struct Outcome { var ok: Bool; var size: CGSize; var audio: Int; var text: String }
+
+    private static func record(_ target: RecordTarget, seconds: Double) async -> Outcome {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mackit-smoke-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("smoke.mp4")
+        let recorder = ScreenRecorder(url: url)
+        var failure: Error?
+        recorder.onFinished = { if case .failure(let e) = $0 { failure = e } }
+        do {
+            try await recorder.start(target: target, options: RecordOptions(systemAudio: true, microphone: false,
+                                                                            quality: .original60), excluding: [])
+            try? await Task.sleep(for: .seconds(seconds))
+            await recorder.stop()
+        } catch {
+            return Outcome(ok: false, size: .zero, audio: 0, text: "开始录制失败：\(error.localizedDescription)")
+        }
+        let asset = AVURLAsset(url: url)
+        let bytes = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        let video = (try? await asset.loadTracks(withMediaType: .video)) ?? []
+        let audio = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
+        let duration = (try? await asset.load(.duration)).map(CMTimeGetSeconds) ?? 0
+        var dims = CGSize.zero
+        if let v = video.first, let natural = try? await v.load(.naturalSize) { dims = natural }
+        let text = "文件 \(bytes) 字节，视频轨 \(video.count)，声音轨 \(audio.count)，时长 \(String(format: "%.2f", duration)) 秒，画面 \(Int(dims.width))×\(Int(dims.height))"
+            + (failure.map { "，报错：\($0.localizedDescription)" } ?? "")
+        return Outcome(ok: bytes > 0 && video.count == 1 && duration > seconds * 0.6 && failure == nil,
+                       size: dims, audio: audio.count, text: text)
+    }
+}
+
