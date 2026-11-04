@@ -242,5 +242,126 @@ check(MagnifierGeometry.origin(size: CGSize(width: 120, height: 150), cursor: CG
 check(MeasureText.points(240, scale: 2) == "120" && MeasureText.points(241, scale: 2) == "120.5"
       && MeasureText.size(widthPixels: 240, heightPixels: 96, scale: 2) == ("120 × 48", "240 × 96"), "测量结果：点和屏幕像素")
 
+// MARK: 长截图拼接
+// 造一张 64 像素宽的假网页：顶部固定导航栏 20 行、底部固定输入框 16 行，中间 900 行内容（7 行字 + 5 行空白，一直重复）
+let pageW = 64, headerH = 20, footerH = 16, visibleH = 160, contentH = 900
+let frameH = headerH + visibleH + footerH
+func contentPixel(_ x: Int, _ y: Int) -> UInt8 {
+    guard y < contentH else { return 255 }                               // 网页到头了，再往下是空白
+    let line = y / 12, row = y % 12
+    guard row < 7, x >= 4, x < pageW - 4 else { return 255 }
+    var h = UInt32(truncatingIfNeeded: line &* 7919 &+ (x / 3) &* 104729 &+ row &* 31)
+    h = (h ^ (h >> 13)) &* 1274126177
+    return (h >> 7) % 3 == 0 ? 40 : 250
+}
+func headerPixel(_ x: Int, _ y: Int) -> UInt8 { y == headerH - 1 ? 150 : (x % 8 < 4 ? 210 : 120) }
+func footerPixel(_ x: Int, _ y: Int) -> UInt8 { y == 0 ? 170 : (x > 10 && x < 40 && y > 4 && y < 12 ? 230 : 200) }
+func pageRows(_ rows: [(Int) -> UInt8]) -> [UInt8] {
+    var px: [UInt8] = []
+    for row in rows { for x in 0..<pageW { let v = row(x); px += [v, v, v, 255] } }
+    return px
+}
+/// 滚到 offset 时拍到的画面；noise：每个像素随机加减一点（模拟文字抗锯齿的细微差别）
+func pageFrame(offset: Int, noise: Bool = false, poke: Bool = false) -> StitchFrame {
+    var rows: [(Int) -> UInt8] = []
+    for y in 0..<headerH { rows.append { headerPixel($0, y) } }
+    for y in 0..<visibleH { rows.append { contentPixel($0, offset + y) } }
+    for y in 0..<footerH { rows.append { footerPixel($0, y) } }
+    var px = pageRows(rows)
+    if noise {
+        var seed: UInt32 = UInt32(offset) &* 2654435761 &+ 1
+        // 只有会滚的内容有细微差别；固定的导航栏、输入框每次画得一模一样
+        for i in stride(from: headerH * pageW * 4, to: (headerH + visibleH) * pageW * 4, by: 4) {
+            seed = seed &* 1664525 &+ 1013904223
+            let delta = Int(seed >> 29) - 3                                  // -3…4
+            let v = UInt8(clamping: Int(px[i]) + delta)
+            px[i] = v; px[i + 1] = v; px[i + 2] = v
+        }
+    }
+    if poke { for x in 30..<33 { for y in 100..<102 { let i = (y * pageW + x) * 4; px[i] = 0; px[i + 1] = 0; px[i + 2] = 0 } } }
+    return StitchFrame(width: pageW, height: frameH, pixels: px)
+}
+func expectedPage(lastOffset: Int) -> [UInt8] {
+    var rows: [(Int) -> UInt8] = []
+    for y in 0..<headerH { rows.append { headerPixel($0, y) } }
+    for y in 0..<(lastOffset + visibleH) { rows.append { contentPixel($0, y) } }
+    for y in 0..<footerH { rows.append { footerPixel($0, y) } }
+    return pageRows(rows)
+}
+
+let stitcher = ScrollStitcher(thumbWidth: 32)
+check(stitcher.add(pageFrame(offset: 0)) == .first, "长截图：第一张")
+check(stitcher.add(pageFrame(offset: 0)) == .same, "长截图：画面没变 → 不拼")
+check(stitcher.add(pageFrame(offset: 0, poke: true)) == .same, "长截图：只有一小块在变（光标闪）→ 不拼，也不当成固定头尾")
+check(stitcher.add(pageFrame(offset: 13)) == .appended(13), "长截图：往下滚 13 行 → 接上 13 行")
+check(stitcher.bands?.top == headerH && stitcher.bands?.bottom == footerH, "长截图：认出顶部导航栏 20 行、底部输入框 16 行")
+check(stitcher.add(pageFrame(offset: 37)) == .appended(24), "长截图：再滚 24 行")
+check(stitcher.add(pageFrame(offset: 60)) == .appended(23), "长截图：再滚 23 行")
+check(stitcher.add(pageFrame(offset: 45)) == .up(15), "长截图：往回滚 15 行 → 长图末尾也退回 15 行")
+check(stitcher.add(pageFrame(offset: 90)) == .appended(45), "长截图：滚回来接着拼")
+check(stitcher.add(pageFrame(offset: 300)) == .lost, "长截图：一下跳太远 → 对不上")
+check(stitcher.add(pageFrame(offset: 120)) == .appended(30), "长截图：往回滚到能对上的地方 → 接着拼")
+check(stitcher.add(pageFrame(offset: 121)) == .appended(1), "长截图：只滚 1 行也认得出")
+var lastOffset = 121
+for offset in stride(from: 200, through: contentH - visibleH, by: 60) {
+    _ = stitcher.add(pageFrame(offset: offset))
+    lastOffset = offset
+}
+check(stitcher.add(pageFrame(offset: lastOffset + 40)) == .appended(40), "长截图：滚到底页面弹一下，露出 40 行空白")
+check(stitcher.add(pageFrame(offset: lastOffset)) == .up(40), "长截图：弹回来 → 空白退掉")
+let stitched = stitcher.result()
+check(stitched?.height == headerH + lastOffset + visibleH + footerH && stitched?.pixels == expectedPage(lastOffset: lastOffset),
+      "长截图：拼出来和原网页一模一样（导航栏、输入框各一份，高 \(stitched?.height ?? 0)）")
+check(stitcher.thumbnail()?.width == 32 && stitcher.thumbnail()?.height == stitcher.canvasRows / 2, "长截图：预览小图按宽度等比缩小")
+check(abs(stitcher.screens - Double(stitcher.totalHeight) / Double(frameH)) < 0.001 && stitcher.totalHeight == stitched?.height,
+      "长截图：总高度和屏数")
+
+let noisy = ScrollStitcher()
+var noisyLast = 0
+_ = noisy.add(pageFrame(offset: 0, noise: true))
+for offset in [17, 40, 71, 100, 133, 160, 199] {
+    if case .appended = noisy.add(pageFrame(offset: offset, noise: true)) { noisyLast = offset }
+}
+check(noisyLast == 199 && noisy.result()?.height == headerH + 199 + visibleH + footerH, "长截图：画面有细微差别（抗锯齿）也对得上")
+
+let capped = ScrollStitcher(maxHeight: 400)
+_ = capped.add(pageFrame(offset: 0))
+var cappedEvents: [ScrollStitcher.Event] = []
+for offset in stride(from: 50, through: 400, by: 50) { cappedEvents.append(capped.add(pageFrame(offset: offset))) }
+check(cappedEvents.contains(.full) && capped.result()?.height == 400 && capped.isFull, "长截图：到高度上限就停，正好 400 行")
+
+let above = ScrollStitcher()
+_ = above.add(pageFrame(offset: 100))
+let aboveEvents = [above.add(pageFrame(offset: 130)), above.add(pageFrame(offset: 60)), above.add(pageFrame(offset: 140))]
+check(aboveEvents == [.appended(30), .up(0), .appended(10)], "长截图：滚到比开始的地方还上面 → 先不管，滚回来接着拼")
+
+let still = ScrollStitcher()
+_ = still.add(pageFrame(offset: 0))
+check(still.result()?.pixels == pageFrame(offset: 0).pixels, "长截图：一下没滚就完成 → 就是第一张")
+let blank = StitchFrame(width: 20, height: 60, pixels: [UInt8](repeating: 255, count: 20 * 60 * 4))
+let blankStitcher = ScrollStitcher()
+_ = blankStitcher.add(blank)
+check(blankStitcher.add(blank) == .same, "长截图：一片空白 → 不拼")
+
+let region = ScreenRegion(displayID: 1, screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+                          viewRect: CGRect(x: 100.25, y: 200, width: 600, height: 700))
+check(region.sourceRect(scale: 2) == CGRect(x: 100.5, y: 217, width: 600, height: 700), "长截图：源区域换成左上原点、对齐到整像素")
+check(ScreenRegion(displayID: 2, screenFrame: CGRect(x: 1728, y: 0, width: 1920, height: 1080),
+                   viewRect: CGRect(x: 10, y: 20, width: 30, height: 40)).globalRect == CGRect(x: 1738, y: 20, width: 30, height: 40),
+      "长截图：外接屏上的框换成全局坐标")
+let lsVisible = CGRect(x: 0, y: 0, width: 1728, height: 1080)
+check(LongShotGeometry.previewFrame(region: CGRect(x: 200, y: 200, width: 600, height: 700), visible: lsVisible, width: 110)
+      == CGRect(x: 816, y: 200, width: 110, height: 700), "长截图：预览条在框的右边、顶端对齐")
+check(LongShotGeometry.previewFrame(region: CGRect(x: 1000, y: 200, width: 700, height: 700), visible: lsVisible, width: 110).maxX
+      == 984, "长截图：右边放不下 → 放左边")
+check(LongShotGeometry.previewFrame(region: CGRect(x: 0, y: 0, width: 1728, height: 1080), visible: lsVisible, width: 110)
+      == CGRect(x: 1610, y: 4, width: 110, height: 1072), "长截图：框占满整屏 → 预览条贴着右边放在框里")
+check(LongShotGeometry.thumbLayout(thumbSize: CGSize(width: 160, height: 100), box: CGSize(width: 80, height: 300))
+      == CGRect(x: 0, y: 250, width: 80, height: 50), "长截图：小图比预览条短 → 靠上")
+check(LongShotGeometry.thumbLayout(thumbSize: CGSize(width: 160, height: 1000), box: CGSize(width: 80, height: 300))
+      == CGRect(x: 0, y: 0, width: 80, height: 500), "长截图：小图比预览条长 → 露出最下面")
+check(LongShotGeometry.progressText(totalHeight: 6200, screens: 3.18) == "已拼约 3.2 屏　6200 像素高"
+      && LongShotGeometry.progressText(totalHeight: 30000, screens: 13.4) == "已拼约 13 屏　30000 像素高", "长截图：进度文字")
+
 print(failures == 0 ? "UNIT TESTS OK" : "UNIT TESTS FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)

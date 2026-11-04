@@ -55,6 +55,11 @@ final class PinTool: ToolModule {
         show(PinWindow(image: result.image, pointSize: result.pointSize, frame: result.globalFrame, scale: 1))
     }
 
+    /// 长截图拼好后点"钉成贴图"：缩到屏幕放得下，放在鼠标旁边
+    func pinImage(_ image: CGImage, pointSize: NSSize) {
+        show(makePin(for: .image(image, pointSize: pointSize), mouse: NSEvent.mouseLocation))
+    }
+
     /// 只造窗口不显示（自检也用它）
     func makePin(for content: PinContent, mouse: CGPoint) -> PinWindow? {
         let visible = (NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main)?.visibleFrame

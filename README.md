@@ -13,6 +13,7 @@ scripts/build.sh                # 只编译
 scripts/install.sh              # 编译、装到 ~/Applications 并启动
 scripts/install.sh --no-open    # 只装不启动
 scripts/smoke-record.sh         # 录屏实录检查：真的录几小段、拼接、转 GIF 再删掉（会短暂出现系统的录屏标志）
+scripts/smoke-longshot.sh       # 长截图实录检查：真的拍屏幕左上角一小块 1.5 秒，看尺寸、量拼接速度（会短暂出现系统的录屏标志）
 MACKIT_BUILDER=swiftc scripts/build.sh   # 装了 Xcode 也强制用命令行编译
 ```
 
@@ -39,9 +40,10 @@ MacKit/
     Clipboard/    剪贴板历史：盯剪贴板、跳过密码、存盘、小窗口、自动粘贴
     Recorder/     录屏：选区域、控制条、倒计时、红框、录制小条、暂停拼接、定时、预览剪辑、GIF、点击高亮、按键显示、摄像头
     Recognize/    识别工具：识别文字和二维码、结果窗口、取色用的像素读取、测量
+    LongShot/     长截图：边拍边拼的算法、控制条和预览条、自动滚动
   Resources/      Info.plist
 Config/           签名设置（Local.xcconfig 是本机私有的）
-Tests/            坐标换算、贴图缩放、选区调整、剪贴板文字、录屏尺寸、按键显示、识别和测量的单元测试
+Tests/            坐标换算、贴图缩放、选区调整、剪贴板文字、录屏尺寸、按键显示、识别和测量、长截图拼接的单元测试
 scripts/          编译、测试、安装脚本
 project.yml       Xcode 工程的生成规则
 ```

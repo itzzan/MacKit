@@ -9,14 +9,16 @@ enum ImageOutput {
         return rep.representation(using: .png, properties: [:])
     }
 
+    /// includeTIFF：再放一份 TIFF（有的老软件只认它）。长截图很大时不放，TIFF 不压缩
     @MainActor
-    static func copyToClipboard(_ image: CGImage, pointSize: NSSize, png: Data) {
+    static func copyToClipboard(_ image: CGImage, pointSize: NSSize, png: Data, to pb: NSPasteboard = .general,
+                                includeTIFF: Bool = true) {
+        pb.clearContents()
+        pb.declareTypes(includeTIFF ? [.png, .tiff] : [.png], owner: nil)
+        pb.setData(png, forType: .png)
+        guard includeTIFF else { return }
         let rep = NSBitmapImageRep(cgImage: image)
         rep.size = pointSize
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.declareTypes([.png, .tiff], owner: nil)
-        pb.setData(png, forType: .png)
         if let tiff = rep.tiffRepresentation { pb.setData(tiff, forType: .tiff) }
     }
 

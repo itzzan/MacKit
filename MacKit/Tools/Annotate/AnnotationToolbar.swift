@@ -105,6 +105,7 @@ final class AnnotationToolbar: NSView {
     var onPin: (() -> Void)?
     var onSave: (() -> Void)?
     var onRecognize: (() -> Void)?
+    var onLongShot: (() -> Void)?
     var onCancel: (() -> Void)?
     var onDone: (() -> Void)?
 
@@ -150,6 +151,9 @@ final class AnnotationToolbar: NSView {
         let recognize = ToolbarButton(symbol: "text.viewfinder", tip: "识别文字（框里的字复制出来）") { [weak self] in
             self?.onRecognize?()
         }
+        let longShot = ToolbarButton(symbol: "rectangle.expand.vertical", tip: "长截图：框不动，往下滚动拼成一张长图") { [weak self] in
+            self?.onLongShot?()
+        }
         let cancel = ToolbarButton(symbol: "xmark", tip: mode == .pin ? "放弃这次画的（Esc）" : "取消（Esc）") { [weak self] in
             self?.onCancel?()
         }
@@ -158,7 +162,7 @@ final class AnnotationToolbar: NSView {
         }
         done.contentTintColor = NSColor(srgbRed: 0.35, green: 0.85, blue: 0.45, alpha: 1)
 
-        let actions: [NSView] = mode == .pin ? [cancel, done] : [recognize, pin, save, cancel, done]
+        let actions: [NSView] = mode == .pin ? [cancel, done] : [recognize, longShot, pin, save, cancel, done]
         hasPinAndSave = mode == .screenshot
         let mainRow = NSStackView(views: tools + [Self.divider(), undoButton, redoButton, Self.divider()] + actions)
         mainRow.orientation = .horizontal

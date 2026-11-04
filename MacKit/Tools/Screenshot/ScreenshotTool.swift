@@ -9,6 +9,8 @@ final class ScreenshotTool: ToolModule {
     var onPin: ((SelectionResult) -> Void)?
     /// 截图工具栏上点"识别文字"：交给识别积木（AppDelegate 里接上）
     var onRecognize: ((CGImage) -> Void)?
+    /// 工具栏上点"长截图"或菜单里"长截图"选好了框：交给长截图积木（AppDelegate 里接上）
+    var onLongShot: ((ScreenRegion) -> Void)?
     private var hotKeyID: UInt32?
     private var session: SelectionSession?
     private var isPreparing = false
@@ -25,9 +27,10 @@ final class ScreenshotTool: ToolModule {
 
     // MARK: 截图流程
 
-    /// delay：从菜单点进来时等菜单收起，免得把菜单也截进去
-    func startSelection(delay: Double = 0) {
-        guard session == nil, !isPreparing, SelectionSession.active == nil, MeasureSession.active == nil else { return }
+    /// delay：从菜单点进来时等菜单收起，免得把菜单也截进去。purpose = .longShot：选好框直接开始长截图
+    func startSelection(delay: Double = 0, purpose: SelectionSession.Purpose = .screenshot) {
+        guard session == nil, !isPreparing, SelectionSession.active == nil, MeasureSession.active == nil,
+              LongShotSession.active == nil else { return }
         guard ScreenPermission.readyToTry() else { return }
         isPreparing = true
         Task { @MainActor in
@@ -38,7 +41,7 @@ final class ScreenshotTool: ToolModule {
                 let frozen = try await ScreenCapturer.capture()
                 guard !frozen.isEmpty else { return }
                 let session = SelectionSession(screens: frozen, windowFrames: windows,
-                                               quickMode: Settings.screenshotQuickMode)
+                                               quickMode: Settings.screenshotQuickMode, purpose: purpose)
                 session.onFinish = { [weak self] outcome in
                     self?.session = nil
                     self?.handle(outcome)
@@ -79,6 +82,8 @@ final class ScreenshotTool: ToolModule {
             Toast.show("✓ 已保存：\(url.lastPathComponent)")
         case .recognize(let result):
             onRecognize?(result.image)
+        case .longShot(let region):
+            onLongShot?(region)
         case .record, .cancelled:
             break
         }
@@ -135,6 +140,9 @@ final class ScreenshotTool: ToolModule {
             items.append(.info("　 先退出 \(rival)，或在下面的「截图快捷键」里换一个"))
         }
         items.append(ActionMenuItem("截取整个屏幕") { [weak self] in self?.captureFullScreen() })
+        items.append(ActionMenuItem("长截图（框选后往下滚，拼成一张长图）") { [weak self] in
+            self?.startSelection(delay: 0.2, purpose: .longShot)
+        })
         let colorMenu = NSMenu()
         let hex = ActionMenuItem("HEX，比如 #FF3B30") { Settings.colorAsHex = true }
         hex.state = Settings.colorAsHex ? .on : .off

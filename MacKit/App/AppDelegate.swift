@@ -23,7 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let recorder = RecorderTool()
     private let ocr = OCRTool()
     private let measure = MeasureTool()
-    private lazy var modules: [ToolModule] = [screenshot, pin, clipboard, recorder, ocr, measure]
+    private let longShot = LongShotTool()
+    private lazy var modules: [ToolModule] = [screenshot, longShot, pin, clipboard, recorder, ocr, measure]
     private(set) var emergencyQuitRegistered = false
 
     init(selfTest: Bool) {
@@ -35,6 +36,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 录屏冒烟测试：不建菜单栏、不注册快捷键，录完就退出
         if let i = CommandLine.arguments.firstIndex(of: "--record-smoke"), CommandLine.arguments.indices.contains(i + 1) {
             RecordSmokeTest.run(resultPath: CommandLine.arguments[i + 1])
+            return
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--longshot-smoke"), CommandLine.arguments.indices.contains(i + 1) {
+            LongShotSmokeTest.run(resultPath: CommandLine.arguments[i + 1])
             return
         }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -54,6 +59,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recorder.onIndicator = { [weak self] text in self?.showRecordingIndicator(text) }
         screenshot.onRecognize = { [weak self] image in self?.ocr.recognize(image) }
         pin.onRecognize = { [weak self] image in self?.ocr.recognize(image) }
+        screenshot.onLongShot = { [weak self] region in self?.longShot.start(region) }
+        longShot.onPin = { [weak self] image, size in self?.pin.pinImage(image, pointSize: size) }
         for module in modules { module.activate() }
         emergencyQuitRegistered = HotKeyCenter.shared.register(EmergencyHotKey.quit) {
             Log.app.notice("emergency quit")
@@ -91,7 +98,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         for module in modules {
-            for item in module.menuItems() { menu.addItem(item) }
+            let items = module.menuItems()
+            guard !items.isEmpty else { continue }
+            for item in items { menu.addItem(item) }
             menu.addItem(.separator())
         }
         menu.addItem(ScreenPermission.menuItem())

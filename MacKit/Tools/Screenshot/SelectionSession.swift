@@ -14,6 +14,7 @@ enum SelectionOutcome {
     case saved(URL)                  // 另存为
     case record(RecordTarget)        // 录屏：选好了要录哪里
     case recognize(SelectionResult)  // 识别文字：选好的那块图
+    case longShot(ScreenRegion)      // 长截图：选好了要拍哪一块
     case cancelled
 }
 
@@ -80,8 +81,8 @@ final class SelectionSession {
 
     var onFinish: ((SelectionOutcome) -> Void)?
 
-    /// 截图（选完进标注）还是录屏（选完就交出要录哪里）
-    enum Purpose { case screenshot, record, recognize }
+    /// 截图（选完进标注）还是录屏、识别、长截图（选完就交出选了哪里）
+    enum Purpose { case screenshot, record, recognize, longShot }
 
     private struct ScreenUI {
         let frozen: FrozenScreen
@@ -115,6 +116,16 @@ final class SelectionSession {
 
     private static let recordHint = "选择要录制的区域　·　单击录一个窗口　·　桌面上单击 = 录整屏　·　Esc 或右键取消"
     private static let recognizeHint = "框选要识别文字的区域　·　单击选窗口　·　Esc 或右键取消"
+    private static let longShotHint = "框选要长截图的区域（比如网页正文、聊天记录），选好后往下滚　·　单击选窗口　·　Esc 或右键取消"
+
+    private var hint: String? {
+        switch purpose {
+        case .screenshot: nil
+        case .record: Self.recordHint
+        case .recognize: Self.recognizeHint
+        case .longShot: Self.longShotHint
+        }
+    }
 
     func begin() {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
@@ -137,7 +148,7 @@ final class SelectionSession {
             container.wantsLayer = true
             let view = SelectionView(frame: bounds, image: frozen.image, windowRects: rects,
                                      scale: frozen.screen.backingScaleFactor,
-                                     hint: purpose == .record ? Self.recordHint : purpose == .recognize ? Self.recognizeHint : nil)
+                                     hint: hint)
             view.autoresizingMask = [.width, .height]
             container.addSubview(view)
 
@@ -180,6 +191,10 @@ final class SelectionSession {
                                           sources: screen.windowSources, windowFrames: windowFrames, windowIDs: windowIDs)))
             return
         }
+        if purpose == .longShot {
+            end(.longShot(Self.region(rect, on: screen.frozen.screen)))
+            return
+        }
         if purpose == .recognize {
             if let result = Self.crop(image: screen.frozen.image, viewSize: screen.view.bounds.size, rect: rect,
                                       screenOrigin: screen.frozen.screen.frame.origin) {
@@ -204,6 +219,7 @@ final class SelectionSession {
         editor.onPin = { [weak self] in self?.finishPin() }
         editor.onSave = { [weak self] in self?.saveAs() }
         editor.onRecognize = { [weak self] in self?.finishRecognize() }
+        editor.onLongShot = { [weak self] in self?.finishLongShot() }
         editor.onCancel = { [weak self] in self?.cancel() }
         editing = (screen, editor, mosaic)
         screen.view.beginEditing(editor, selection: rect)
@@ -253,6 +269,16 @@ final class SelectionSession {
               let result = Self.crop(image: editing.screen.frozen.image, viewSize: editing.screen.view.bounds.size, rect: rect,
                                      screenOrigin: editing.screen.frozen.screen.frame.origin) else { return }
         end(.recognize(result))
+    }
+
+    /// 截图工具栏上点"长截图"：画的标注不要了，就用这个框
+    func finishLongShot() {
+        guard !isSaving, let editing, let rect = editing.screen.view.currentSelection else { return }
+        end(.longShot(Self.region(rect, on: editing.screen.frozen.screen)))
+    }
+
+    static func region(_ rect: CGRect, on screen: NSScreen) -> ScreenRegion {
+        ScreenRegion(displayID: screen.displayID ?? CGMainDisplayID(), screenFrame: screen.frame, viewRect: rect)
     }
 
     /// 贴图快捷键或📌按钮

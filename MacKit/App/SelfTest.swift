@@ -47,6 +47,7 @@ enum SelfTest {
         testRecordingExtras(recorder)
         testRecordingOverlays(recorder)
         testRecognize()
+        testLongShot(menu: statusItem.menu)
 
         print(failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED (\(failures))")
         exit(failures == 0 ? 0 : 1)
@@ -1126,6 +1127,192 @@ enum SelfTest {
         check(pinMenu.contains("识别文字"), "贴图右键菜单里有「识别文字」")
     }
 
+    // MARK: 长截图
+
+    private static func testLongShot(menu: NSMenu?) {
+        let titles = menu?.items.map(\.title) ?? []
+        check(titles.contains("长截图（框选后往下滚，拼成一张长图）"), "菜单里有\u{201C}长截图\u{201D}")
+
+        // 截图工具栏上的按钮
+        let viewSize = CGSize(width: 1512, height: 982)
+        let image = makeTestImage(width: 3024, height: 1964)
+        let container = NSView(frame: CGRect(origin: .zero, size: viewSize))
+        let editor = AnnotationEditor(container: container, mosaic: MosaicSource(image: image, viewSize: viewSize))
+        var longShots = 0
+        editor.onLongShot = { longShots += 1 }
+        let button = findButton(in: editor.toolbar) { $0.toolTip?.hasPrefix("长截图") == true }
+        button?.performClick(nil)
+        check(button != nil && longShots == 1, "截图工具栏有\u{201C}长截图\u{201D}按钮，点了交给长截图")
+        editor.tearDown()
+
+        if let screen = NSScreen.main {
+            let r = SelectionSession.region(CGRect(x: 100, y: 120, width: 500, height: 600), on: screen)
+            check(r.viewRect == CGRect(x: 100, y: 120, width: 500, height: 600) && r.screenFrame == screen.frame
+                  && r.displayID == screen.displayID, "选好的框 → 长截图要拍的区域")
+        }
+
+        // 假网页：250 像素宽，顶部导航栏 30 行、底部输入框 24 行固定，框里一次露出 300 行
+        let w = 250, header = 30, visible = 300, footer = 24
+        func contentGray(_ x: Int, _ y: Int) -> UInt8 {
+            let line = y / 18, row = y % 18
+            guard row < 11, x >= 10, x < w - 10 else { return 255 }
+            var h = UInt32(truncatingIfNeeded: line &* 7919 &+ (x / 4) &* 104729 &+ row &* 31)
+            h = (h ^ (h >> 13)) &* 1274126177
+            return (h >> 7) % 3 == 0 ? 30 : 245
+        }
+        func headerGray(_ x: Int, _ y: Int) -> UInt8 { y == header - 1 ? 140 : (x % 10 < 5 ? 220 : 110) }
+        func footerGray(_ x: Int, _ y: Int) -> UInt8 { y == 0 ? 160 : (x > 20 && x < 150 && y > 6 && y < 18 ? 235 : 205) }
+        func pageGray(lastOffset o: Int, _ x: Int, _ y: Int) -> UInt8 {
+            if y < header { return headerGray(x, y) }
+            if y < header + o + visible { return contentGray(x, y - header) }
+            return footerGray(x, y - header - o - visible)
+        }
+        func frameImage(_ o: Int) -> CGImage? {
+            grayImage(width: w, height: header + visible + footer) { x, y in
+                y < header ? headerGray(x, y) : y < header + visible ? contentGray(x, o + y - header) : footerGray(x, y - header - visible)
+            }
+        }
+
+        let capture = LongShotCapture()
+        var events: [ScrollStitcher.Event] = []
+        var thumbs = 0
+        capture.onProgress = { p in
+            events.append(p.event)
+            if p.thumb != nil { thumbs += 1 }
+        }
+        let offsets = [0, 0, 25, 60, 61, 140, 100, 230, 320, 410, 500, 590, 680, 770, 860, 950, 1040, 1100]
+        var padded = false
+        for o in offsets {
+            guard let img = frameImage(o), let buffer = pixelBuffer(from: img),
+                  let frame = LongShotCapture.frame(from: buffer) else { check(false, "长截图：造假画面"); return }
+            if CVPixelBufferGetBytesPerRow(buffer) > w * 4 { padded = true }
+            capture.queue.async { capture.process(frame) }
+        }
+        let stitched = awaitResult { await withCheckedContinuation { (c: CheckedContinuation<CGImage?, Never>) in
+            capture.finish { c.resume(returning: $0) }
+        } } ?? nil
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        let last = offsets.last ?? 0
+        let expectedEvents: [ScrollStitcher.Event] = [.first, .same, .appended(25), .appended(35), .appended(1), .appended(79), .up(40)]
+            + (7..<offsets.count).map { .appended(offsets[$0] - offsets[$0 - 1]) }
+        if events != expectedEvents { info("长截图收到的：\(events)") }
+        check(events == expectedEvents, "长截图：系统给的画面（行尾带填充：\(padded)）一张张拼上，往回滚就退回去")
+        check(thumbs == offsets.count - 1, "长截图：每拼上一段、退回一段，预览小图就更新（没变的那张不更新）")
+        let expectedHeight = header + last + visible + footer
+        var same = stitched?.width == w && stitched?.height == expectedHeight
+        if same, let stitched, let px = PixelBuffer(image: stitched) {
+            outer: for y in 0..<expectedHeight {
+                for x in stride(from: 0, to: w, by: 1) {
+                    let g = Int(pageGray(lastOffset: last, x, y))
+                    let c = px.rgb(x, y)
+                    if c.0 != g || c.1 != g || c.2 != g { same = false; info("长截图第一个不对的像素：(\(x), \(y)) \(c) ≠ \(g)"); break outer }
+                }
+            }
+        }
+        check(same, "长截图：拼出来和原网页一模一样（\(w)×\(stitched?.height ?? 0)，导航栏、输入框各一份）")
+
+        // 控制条、预览条（不显示窗口、不拍屏幕、不注册回车和 Esc）
+        if let screen = NSScreen.main {
+            let region = ScreenRegion(displayID: screen.displayID ?? CGMainDisplayID(), screenFrame: screen.frame,
+                                      viewRect: CGRect(x: 300, y: 200, width: 600, height: 500))
+            let session = LongShotSession(region: region)
+            var finishes: [CGImage?] = []
+            session.onFinish = { finishes.append($0) }
+            session.begin(startCapture: false, showWindows: false)
+            check(LongShotSession.active === session && session.bar.label.stringValue == LongShotControlBar.startText,
+                  "长截图开始：控制条提示往下滚、回车完成、Esc 取消")
+            check(session.preview.panel.frame == LongShotGeometry.previewFrame(region: region.globalRect, visible: screen.visibleFrame,
+                                                                             width: LongShotPreview.width)
+                  && session.bar.panel.frame.width > 400, "长截图：预览条在框旁边，控制条放得下进度和按钮")
+            session.handle(LongShotProgress(event: .appended(40), totalHeight: 1400, screens: 1.4, thumb: stitched))
+            check(session.bar.label.stringValue == "已拼约 1.4 屏　1400 像素高" && !session.bar.isWarning
+                  && session.preview.view.image != nil, "长截图：拼上一段 → 进度更新、预览出图")
+            session.handle(LongShotProgress(event: .lost, totalHeight: 1400, screens: 1.4, thumb: nil))
+            check(session.bar.isWarning && session.bar.label.stringValue.contains("往回滚"), "长截图：对不上 → 黄字提示往回滚一点")
+            session.handle(LongShotProgress(event: .appended(30), totalHeight: 1430, screens: 1.43, thumb: nil))
+            check(!session.bar.isWarning, "长截图：又对上了 → 提示恢复")
+            session.handle(LongShotProgress(event: .full, totalHeight: 30000, screens: 13, thumb: nil))
+            check(session.bar.label.stringValue.contains("上限"), "长截图：到上限 → 提示点完成")
+            session.cancel()
+            check(finishes.count == 1 && finishes[0] == nil && LongShotSession.active == nil, "长截图：取消 → 什么都不留")
+
+            let done = LongShotSession(region: region)
+            var doneImage: CGImage?
+            done.onFinish = { doneImage = $0 }
+            done.begin(startCapture: false, showWindows: false)
+            for o in [0, 50] {
+                if let img = frameImage(o), let buffer = pixelBuffer(from: img), let f = LongShotCapture.frame(from: buffer) {
+                    done.capture.queue.async { done.capture.process(f) }
+                }
+            }
+            done.finish()
+            let deadline = Date().addingTimeInterval(5)
+            while doneImage == nil && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+            check(doneImage?.height == header + 50 + visible + footer && LongShotSession.active == nil, "长截图：点完成 → 交出拼好的长图")
+        }
+
+        let scroller = AutoScroller(region: CGRect(x: 100, y: 200, width: 600, height: 700))
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        check(scroller.point == CGPoint(x: 400, y: primaryHeight - 550) && scroller.step == 42 && !scroller.isRunning,
+              "自动滚动：在框的正中间滚，每次 42 点（自检里不真滚）")
+
+        // 复制 + 存 PNG（私有剪贴板、临时文件夹）
+        let pb = NSPasteboard(name: NSPasteboard.Name("local.mackit.selftest.longshot.\(UUID().uuidString)"))
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MacKitLongShot-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: folder)
+            pb.releaseGlobally()
+        }
+        if let stitched {
+            let out = LongShotTool.output(stitched, scale: 2, pasteboard: pb, folder: folder)
+            let saved = out?.url.flatMap { NSImage(contentsOf: $0) }
+            check(out?.url != nil && saved != nil && pb.data(forType: .png) != nil && pb.data(forType: .tiff) != nil
+                  && out?.pointSize == NSSize(width: CGFloat(w) / 2, height: CGFloat(stitched.height) / 2),
+                  "长截图：复制到剪贴板，同时存成 PNG（点数 = 像素 ÷ 2）")
+        }
+        if let big = grayImage(width: 4001, height: 4001, { _, _ in 255 }) {
+            _ = LongShotTool.output(big, scale: 2, pasteboard: pb, folder: folder)
+            // 只写了 PNG；别的软件要 TIFF 时系统会现转，平时不占几百 MB
+            check(pb.data(forType: .png) != nil && pb.types?.first == .png, "长截图：图很大时剪贴板里只写 PNG")
+        }
+    }
+
+    private static func findButton(in view: NSView, where match: (NSButton) -> Bool) -> NSButton? {
+        if let b = view as? NSButton, match(b) { return b }
+        for sub in view.subviews { if let found = findButton(in: sub, where: match) { return found } }
+        return nil
+    }
+
+    /// 灰度假图（sRGB）：gray(x, y)，y 从上往下数
+    private static func grayImage(width: Int, height: Int, _ gray: (Int, Int) -> UInt8) -> CGImage? {
+        var bytes = [UInt8](repeating: 255, count: width * height * 4)
+        for y in 0..<height {
+            for x in 0..<width {
+                let v = gray(x, y), i = (y * width + x) * 4
+                bytes[i] = v; bytes[i + 1] = v; bytes[i + 2] = v
+            }
+        }
+        guard let provider = CGDataProvider(data: Data(bytes) as CFData) else { return nil }
+        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+                       space: sRGB, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+    }
+
+    /// 像系统送来的画面一样：BGRA 的 CVPixelBuffer
+    private static func pixelBuffer(from image: CGImage) -> CVPixelBuffer? {
+        var buffer: CVPixelBuffer?
+        CVPixelBufferCreate(nil, image.width, image.height, kCVPixelFormatType_32BGRA, nil, &buffer)
+        guard let buffer else { return nil }
+        CVPixelBufferLockBaseAddress(buffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+        guard let ctx = CGContext(data: CVPixelBufferGetBaseAddress(buffer), width: image.width, height: image.height,
+                                  bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(buffer), space: sRGB,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return nil }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return buffer
+    }
+
     private static func makeQRCode(_ text: String) -> CGImage? {
         guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
         filter.setValue(Data(text.utf8), forKey: "inputMessage")
@@ -1343,3 +1530,63 @@ enum RecordSmokeTest {
     }
 }
 
+
+/// 长截图实录检查：MacKit --longshot-smoke <结果文件>
+/// 真的拍屏幕左上角一小块 1.5 秒（不弹窗口、不滚动、不存文件），看系统画面能不能送到、拼出来尺寸对不对；
+/// 再用 1600×1600 的大假画面量一下拼一张要多久（每秒 8 张，得跟得上）。要用 open 启动
+@MainActor
+enum LongShotSmokeTest {
+    static func run(resultPath: String) {
+        Task { @MainActor in
+            var lines: [String] = []
+            var ok = true
+            guard let screen = NSScreen.screens.first, let id = screen.displayID else { finish(["没有屏幕"], false, resultPath); return }
+            let scale = screen.backingScaleFactor
+            let region = ScreenRegion(displayID: id, screenFrame: screen.frame,
+                                      viewRect: CGRect(x: 40, y: screen.frame.height - 60 - 200, width: 300, height: 200))
+            let capture = LongShotCapture()
+            var events: [ScrollStitcher.Event] = []
+            capture.onProgress = { events.append($0.event) }
+            do {
+                try await capture.start(region: region)
+                try? await Task.sleep(for: .seconds(1.5))
+                let image: CGImage? = await withCheckedContinuation { c in capture.finish { c.resume(returning: $0) } }
+                let expect = (Int(300 * scale), Int(200 * scale))
+                lines.append("实拍：收到 \(events.count) 张（第一张：\(events.first.map { "\($0)" } ?? "无")），"
+                             + "拼出 \(image?.width ?? 0)×\(image?.height ?? 0)，应为 \(expect.0)×\(expect.1)")
+                ok = ok && events.first == .first && image?.width == expect.0 && image?.height == expect.1
+            } catch {
+                lines.append("实拍失败：\(error.localizedDescription)")
+                ok = false
+            }
+
+            // 速度：1600 宽、一屏 1600 行，每次滚 120 行
+            let w = 1600, h = 1600, total = h + 120 * 12
+            var page = [UInt8](repeating: 255, count: w * total * 4)
+            for y in 0..<total where y % 28 < 16 {
+                for x in 20..<(w - 20) {
+                    var v = UInt32(truncatingIfNeeded: (y / 28) &* 7919 &+ (x / 6) &* 104729 &+ (y % 28) &* 31)
+                    v = (v ^ (v >> 13)) &* 1274126177
+                    if (v >> 7) % 3 == 0 { let i = (y * w + x) * 4; page[i] = 30; page[i + 1] = 30; page[i + 2] = 30 }
+                }
+            }
+            let stitcher = ScrollStitcher()
+            var appended = 0
+            let start = Date()
+            for k in 0...12 {
+                let o = k * 120
+                let frame = StitchFrame(width: w, height: h, pixels: Array(page[(o * w * 4)..<((o + h) * w * 4)]))
+                if case .appended = stitcher.add(frame) { appended += 1 }
+            }
+            let ms = Date().timeIntervalSince(start) * 1000 / 13
+            lines.append(String(format: "速度：1600×1600 的画面拼一张平均 %.0f 毫秒（每秒 8 张要在 125 毫秒内），接上 %d/12 段", ms, appended))
+            ok = ok && ms < 125 && appended == 12 && stitcher.result()?.height == total
+            finish(lines, ok, resultPath)
+        }
+    }
+
+    private static func finish(_ lines: [String], _ ok: Bool, _ path: String) {
+        try? (lines + [ok ? "SMOKE OK" : "SMOKE FAILED"]).joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        exit(ok ? 0 : 1)
+    }
+}

@@ -1,0 +1,190 @@
+import AppKit
+
+/// 长截图时框下面的小控制条：进度文字、⬇ 自动滚动、✕ 取消、✓ 完成
+@MainActor
+final class LongShotControlBar {
+    var onAuto: (() -> Void)?
+    var onCancel: (() -> Void)?
+    var onDone: (() -> Void)?
+    let panel: NSPanel
+    let label = NSTextField(labelWithString: "")
+    private(set) var autoButton: ToolbarButton!
+    private(set) var doneButton: ToolbarButton!
+    private(set) var isWarning = false
+
+    static let startText = "往下滚动，MacKit 边看边拼　·　回车完成　·　Esc 取消"
+
+    init() {
+        panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .popUpMenu
+        panel.canHide = false                         // 选完区域 MacKit 会藏起来交还焦点，控制条要留着
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.animationBehavior = .none
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+
+        label.font = .systemFont(ofSize: 12, weight: .medium)
+        label.textColor = .white
+        label.lineBreakMode = .byTruncatingTail
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.widthAnchor.constraint(equalToConstant: 330).isActive = true
+        autoButton = ToolbarButton(symbol: "arrow.down.circle", title: "自动滚动", tip: "MacKit 替你往下滚，到底自动停",
+                                   width: 104) { [weak self] in self?.onAuto?() }
+        let cancel = ToolbarButton(symbol: "xmark", tip: "取消（Esc）") { [weak self] in self?.onCancel?() }
+        doneButton = ToolbarButton(symbol: "checkmark", title: "完成", tip: "完成：复制并保存（回车）", width: 72) { [weak self] in
+            self?.onDone?()
+        }
+        doneButton.contentTintColor = NSColor(srgbRed: 0.35, green: 0.85, blue: 0.45, alpha: 1)
+
+        let row = NSStackView(views: [label, autoButton, cancel, doneButton])
+        row.orientation = .horizontal
+        row.spacing = 4
+        row.edgeInsets = NSEdgeInsets(top: 5, left: 12, bottom: 5, right: 8)
+        panel.contentView = RecordingControlBar.hudBackground(containing: row, cornerRadius: 9)
+        panel.setContentSize(row.fittingSize)
+        setStatus(Self.startText)
+    }
+
+    func setStatus(_ text: String, warning: Bool = false) {
+        label.stringValue = text
+        label.textColor = warning ? .systemYellow : .white
+        isWarning = warning
+    }
+
+    func setAutoScrolling(_ on: Bool) {
+        autoButton.setSymbol(on ? "stop.circle" : "arrow.down.circle", tip: on ? "停下来，自己滚" : "MacKit 替你往下滚，到底自动停")
+        autoButton.setTitle(on ? "停止滚动" : "自动滚动")
+    }
+
+    /// 放在框的下方、右对齐；下面放不下就放上面
+    func show(near region: CGRect, on screen: NSScreen?) {
+        let visible = (screen ?? NSScreen.main)?.visibleFrame ?? region
+        let m = RecordingBorderWindow.margin
+        panel.setFrameOrigin(EditGeometry.toolbarOrigin(size: panel.frame.size, selection: region.insetBy(dx: -m, dy: -m),
+                                                        bounds: visible))
+        panel.orderFrontRegardless()
+    }
+
+    func close() { panel.orderOut(nil) }
+}
+
+/// 框旁边的预览条：拼好的长图缩小了竖着放，长了就露出最新拼上的那一截
+@MainActor
+final class LongShotPreview {
+    static let width: CGFloat = 110
+    let panel: NSPanel
+    let view = LongShotThumbView()
+
+    init(frame: CGRect) {
+        panel = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .popUpMenu
+        panel.ignoresMouseEvents = true
+        panel.canHide = false
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.animationBehavior = .none
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        view.frame = CGRect(origin: .zero, size: frame.size)
+        view.autoresizingMask = [.width, .height]
+        panel.contentView = view
+    }
+
+    func update(_ thumb: CGImage) {
+        view.image = thumb
+        view.needsDisplay = true
+    }
+
+    func show() { panel.orderFrontRegardless() }
+    func close() { panel.orderOut(nil) }
+}
+
+final class LongShotThumbView: NSView {
+    var image: CGImage?
+    static let inset: CGFloat = 5
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let outer = CGPath(roundedRect: bounds, cornerWidth: 8, cornerHeight: 8, transform: nil)
+        ctx.addPath(outer)
+        ctx.setFillColor(NSColor.black.withAlphaComponent(0.72).cgColor)
+        ctx.fillPath()
+        let box = bounds.insetBy(dx: Self.inset, dy: Self.inset)
+        guard let image else {
+            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.white]
+            ("预览" as NSString).draw(at: CGPoint(x: box.minX + 4, y: box.maxY - 18), withAttributes: attrs)
+            return
+        }
+        let layout = LongShotGeometry.thumbLayout(thumbSize: CGSize(width: image.width, height: image.height), box: box.size)
+        ctx.saveGState()
+        ctx.clip(to: box)
+        ctx.interpolationQuality = .medium
+        ctx.draw(image, in: layout.offsetBy(dx: box.minX, dy: box.minY))
+        ctx.restoreGState()
+    }
+}
+
+/// 自动滚动：在框的正中间替你一小段一小段地滚滚轮（要"辅助功能"权限）。
+/// 你一动鼠标就停，免得跟你抢
+@MainActor
+final class AutoScroller {
+    static let interval: TimeInterval = 0.05
+    /// 哪个方向是往下（合成的滚轮事件一般负数是往下；不对的话长截图会话会反过来，记住下次用）
+    static var downSign: Int32 = -1
+    private(set) var isRunning = false
+    private var timer: Timer?
+    /// 框的中心：CG 全局坐标（左上原点），发事件用
+    let point: CGPoint
+    /// 框的中心：Cocoa 全局坐标，看鼠标有没有被你挪走
+    let cocoaPoint: CGPoint
+    /// 每次滚多少点
+    let step: Int32
+    var onMouseMoved: (() -> Void)?
+
+    init(region: CGRect) {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? region.maxY
+        cocoaPoint = CGPoint(x: region.midX, y: region.midY)
+        point = CGPoint(x: region.midX, y: primaryHeight - region.midY)
+        step = Int32(max(4, min(80, region.height * 0.06)))       // 大约每秒滚 1.2 个框高
+    }
+
+    static var hasPermission: Bool { AXIsProcessTrusted() }
+
+    func start() {
+        guard !isRunning else { return }
+        isRunning = true
+        CGWarpMouseCursorPosition(point)
+        let t = Timer(timeInterval: Self.interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+    }
+
+    func stop() {
+        isRunning = false
+        timer?.invalidate()
+        timer = nil
+    }
+
+    func flipDirection() { Self.downSign = -Self.downSign }
+
+    private func tick() {
+        let m = NSEvent.mouseLocation
+        if hypot(m.x - cocoaPoint.x, m.y - cocoaPoint.y) > 40 {
+            stop()
+            onMouseMoved?()
+            return
+        }
+        let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
+                            wheel1: Self.downSign * step, wheel2: 0, wheel3: 0)
+        event?.location = point
+        event?.post(tap: .cghidEventTap)
+    }
+}
