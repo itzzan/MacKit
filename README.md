@@ -33,7 +33,7 @@ MacKit/
   Core/           公共积木：快捷键、设置、权限、提示条、菜单、截图记录
   Tools/
     Screenshot/   截图：冻屏、选区覆盖层、坐标换算、复制和保存
-    Pin/          贴图：贴图窗口、缩放透明度、读剪贴板、文字卡片
+    Pin/          贴图：贴图窗口、缩放透明度、读剪贴板、文字卡片、贴图上标注
     Annotate/     标注：八种工具、工具栏、撤销重做、马赛克、导出
   Resources/      Info.plist
 Config/           签名设置（Local.xcconfig 是本机私有的）

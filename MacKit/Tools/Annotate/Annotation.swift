@@ -128,6 +128,28 @@ final class AnnotationDocument {
     private var undoStack: [[Annotation]] = []
     private var redoStack: [[Annotation]] = []
 
+    /// 存档点：标注列表 + 撤销/重做记录
+    struct Checkpoint {
+        fileprivate let items: [Annotation]
+        fileprivate let undoStack: [[Annotation]]
+        fileprivate let redoStack: [[Annotation]]
+    }
+
+    init(items: [Annotation] = []) {
+        self.items = items
+    }
+
+    func checkpoint() -> Checkpoint {
+        Checkpoint(items: items, undoStack: undoStack, redoStack: redoStack)
+    }
+
+    /// 回到存档点（贴图标注按 Esc 放弃这一次画的）
+    func restore(_ c: Checkpoint) {
+        items = c.items
+        undoStack = c.undoStack
+        redoStack = c.redoStack
+    }
+
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
 

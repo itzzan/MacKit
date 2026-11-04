@@ -75,6 +75,11 @@ final class ColorSwatch: NSButton {
 /// 截图框旁边的工具栏：上面一排工具和操作，选了工具后下面多一排颜色和粗细
 @MainActor
 final class AnnotationToolbar: NSView {
+    enum Mode {
+        case screenshot      // 截图：📌 贴图、💾 另存、✕ 取消、✓ 完成
+        case pin             // 贴图上标注：✕ 放弃这次画的、✓ 完成
+    }
+
     var onTool: ((AnnotationTool) -> Void)?
     var onColor: ((AnnotationColor) -> Void)?
     var onSize: ((AnnotationSize) -> Void)?
@@ -92,14 +97,18 @@ final class AnnotationToolbar: NSView {
     private var redoButton: ToolbarButton!
     private let propertyRow = NSStackView()
     private let stack = NSStackView()
+    let mode: Mode
+    private(set) var hasPinAndSave = true
 
-    init() {
+    /// standalone：工具栏单独放在一个透明小窗口里（贴图用），背景要透出窗口后面的东西
+    init(mode: Mode = .screenshot, standalone: Bool = false) {
+        self.mode = mode
         super.init(frame: .zero)
         wantsLayer = true
 
         let background = NSVisualEffectView()
         background.material = .hudWindow
-        background.blendingMode = .withinWindow
+        background.blendingMode = standalone ? .behindWindow : .withinWindow
         background.state = .active
         background.appearance = NSAppearance(named: .darkAqua)
         background.wantsLayer = true
@@ -120,11 +129,17 @@ final class AnnotationToolbar: NSView {
         redoButton = ToolbarButton(symbol: "arrow.uturn.forward", tip: "重做（⇧⌘Z）") { [weak self] in self?.onRedo?() }
         let pin = ToolbarButton(symbol: "pin", tip: "贴图：钉在原位置（⌘2）") { [weak self] in self?.onPin?() }
         let save = ToolbarButton(symbol: "square.and.arrow.down", tip: "另存为（⌘S）") { [weak self] in self?.onSave?() }
-        let cancel = ToolbarButton(symbol: "xmark", tip: "取消（Esc）") { [weak self] in self?.onCancel?() }
-        let done = ToolbarButton(symbol: "checkmark", tip: "完成：复制并保存（回车）") { [weak self] in self?.onDone?() }
+        let cancel = ToolbarButton(symbol: "xmark", tip: mode == .pin ? "放弃这次画的（Esc）" : "取消（Esc）") { [weak self] in
+            self?.onCancel?()
+        }
+        let done = ToolbarButton(symbol: "checkmark", tip: mode == .pin ? "完成标注（回车）" : "完成：复制并保存（回车）") { [weak self] in
+            self?.onDone?()
+        }
         done.contentTintColor = NSColor(srgbRed: 0.35, green: 0.85, blue: 0.45, alpha: 1)
 
-        let mainRow = NSStackView(views: tools + [Self.divider(), undoButton, redoButton, Self.divider(), pin, save, cancel, done])
+        let actions: [NSView] = mode == .pin ? [cancel, done] : [pin, save, cancel, done]
+        hasPinAndSave = mode == .screenshot
+        let mainRow = NSStackView(views: tools + [Self.divider(), undoButton, redoButton, Self.divider()] + actions)
         mainRow.orientation = .horizontal
         mainRow.spacing = 2
 

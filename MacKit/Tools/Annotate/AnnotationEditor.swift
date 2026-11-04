@@ -4,9 +4,11 @@ import AppKit
 /// 鼠标和键盘事件由选区视图转过来；画面由 AnnotationCanvasView 显示。
 @MainActor
 final class AnnotationEditor: NSObject, NSTextViewDelegate {
-    let document = AnnotationDocument()
+    let document: AnnotationDocument
     let canvas: AnnotationCanvasView
-    let toolbar = AnnotationToolbar()
+    let toolbar: AnnotationToolbar
+    /// 工具栏放在画板里（截图）还是交给使用方摆（贴图：放在挂在贴图下方的小窗口里）
+    private let embedsToolbar: Bool
     private(set) var tool: AnnotationTool?
     private(set) var color: AnnotationColor
     private(set) var size: AnnotationSize
@@ -38,9 +40,15 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
     var onPin: (() -> Void)?
     var onSave: (() -> Void)?
     var onCancel: (() -> Void)?
+    /// 工具栏大小变了（选了工具多出一排），使用方自己摆工具栏时用
+    var onToolbarChange: (() -> Void)?
 
-    init(container: NSView, mosaic: MosaicSource) {
+    init(container: NSView, mosaic: MosaicSource, document: AnnotationDocument = AnnotationDocument(),
+         customToolbar: AnnotationToolbar? = nil, embedsToolbar: Bool = true) {
         self.container = container
+        self.document = document
+        self.toolbar = customToolbar ?? AnnotationToolbar()
+        self.embedsToolbar = embedsToolbar
         canvas = AnnotationCanvasView(frame: container.bounds)
         canvas.autoresizingMask = [.width, .height]
         canvas.mosaic = mosaic
@@ -48,7 +56,7 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
         size = AnnotationSize(rawValue: Settings.annotationSizeIndex) ?? .medium
         super.init()
         container.addSubview(canvas)
-        container.addSubview(toolbar)
+        if embedsToolbar { container.addSubview(toolbar) }
         toolbar.onTool = { [weak self] t in self?.selectTool(t) }
         toolbar.onColor = { [weak self] c in self?.setColor(c, remember: true) }
         toolbar.onSize = { [weak self] s in self?.setSize(s, remember: true) }
@@ -242,6 +250,7 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
     }
 
     private func layoutToolbar() {
+        guard embedsToolbar else { onToolbarChange?(); return }
         guard let container else { return }
         let origin = EditGeometry.toolbarOrigin(size: toolbar.frame.size, selection: selection, bounds: container.bounds)
         toolbar.setFrameOrigin(origin)

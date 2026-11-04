@@ -5,17 +5,28 @@ import UniformTypeIdentifiers
 /// 点它不会把焦点从你正在用的软件抢走（只有点了贴图，Esc / ⌘W 才作用在它身上）。
 @MainActor
 final class PinWindow: NSPanel {
-    let image: CGImage
+    /// 贴出来时的原图。标注另外记，显示、复制、另存时现场合成，所以以后还能接着改
+    let originalImage: CGImage
+    /// 这张贴图上的标注（带撤销记录，下次进标注接着用）
+    let document = AnnotationDocument()
+    /// 原图 + 标注合成后的图
+    private(set) var renderedImage: CGImage
+    var image: CGImage { renderedImage }
+    private(set) var annotationSession: PinAnnotationSession?
+    var isAnnotating: Bool { annotationSession != nil }
     let basePointSize: NSSize          // 100% 时的大小（点）
     private(set) var scale: CGFloat
     var onClosed: ((PinWindow) -> Void)?
     var onCloseAll: (() -> Void)?
 
     var isClickThrough: Bool { ignoresMouseEvents }
-    private var pinView: PinView? { contentView as? PinView }
+    /// 画面视图。窗口的 contentView 是一个普通的外层视图，画面和标注画板并排放在里面
+    /// （画面视图自己管图层，不能往它里面塞子视图）
+    private(set) var pinView: PinView?
 
     init(image: CGImage, pointSize: NSSize, frame: CGRect, scale: CGFloat) {
-        self.image = image
+        self.originalImage = image
+        self.renderedImage = image
         self.basePointSize = pointSize
         self.scale = PinGeometry.clampScale(scale)
         super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
@@ -32,15 +43,57 @@ final class PinWindow: NSPanel {
         animationBehavior = .none
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
 
-        let view = PinView(frame: CGRect(origin: .zero, size: frame.size), image: image,
-                           backingScale: NSScreen.main?.backingScaleFactor ?? 2)
+        let root = NSView(frame: CGRect(origin: .zero, size: frame.size))
+        root.wantsLayer = true
+        let view = PinView(frame: root.bounds, image: image, backingScale: NSScreen.main?.backingScaleFactor ?? 2)
+        view.autoresizingMask = [.width, .height]
         view.pin = self
-        contentView = view
+        root.addSubview(view)
+        contentView = root
+        pinView = view
         setFrame(frame, display: false)
     }
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        TextEditingKeys.handle(event, firstResponder: firstResponder) || super.performKeyEquivalent(with: event)
+    }
+
+    // MARK: 标注
+
+    /// 右键"标注"或按空格。present = false 只给自检用：不显示、不抢焦点
+    func beginAnnotating(present: Bool = true) {
+        guard !isAnnotating, !isClickThrough else { return }
+        let session = PinAnnotationSession(pin: self, present: present)
+        annotationSession = session
+        session.begin()
+    }
+
+    /// 标注会话结束（完成或放弃）后调用
+    func annotationSessionEnded() {
+        annotationSession = nil
+        rebuildRenderedImage()
+        if let pinView { makeFirstResponder(pinView) }
+    }
+
+    /// 标注时贴图本身只显示原图，标注由画板画在上面；结束后换回合成图
+    func showOriginalWhileAnnotating(_ on: Bool) {
+        pinView?.setImage(on ? originalImage : renderedImage)
+    }
+
+    private func rebuildRenderedImage() {
+        if document.items.isEmpty {
+            renderedImage = originalImage
+        } else if let result = AnnotationExporter.export(
+            image: originalImage, viewSize: basePointSize, selection: CGRect(origin: .zero, size: basePointSize),
+            screenOrigin: .zero, annotations: document.items,
+            mosaic: MosaicSource(image: originalImage, viewSize: basePointSize)) {
+            renderedImage = result.image
+        }
+        pinView?.setImage(renderedImage)
+    }
 
     override func becomeKey() {
         super.becomeKey()
@@ -114,6 +167,10 @@ final class PinWindow: NSPanel {
 
     func makeContextMenu() -> NSMenu {
         let menu = NSMenu()
+        let annotate = ActionMenuItem("标注（空格）") { [weak self] in self?.beginAnnotating() }
+        annotate.isEnabled = !isClickThrough
+        menu.addItem(annotate)
+        menu.addItem(.separator())
         menu.addItem(ActionMenuItem("复制", key: "c", modifiers: .command) { [weak self] in self?.copyImage() })
         menu.addItem(ActionMenuItem("另存为…", key: "s", modifiers: .command) { [weak self] in self?.saveAs() })
         menu.addItem(.separator())
@@ -185,6 +242,13 @@ final class PinView: NSView {
 
     required init?(coder: NSCoder) { fatalError("not supported") }
 
+    func setImage(_ image: CGImage) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        imageLayer.contents = image
+        CATransaction.commit()
+    }
+
     func setFocused(_ focused: Bool) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -254,11 +318,16 @@ final class PinView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { pin?.closePin() } else { super.keyDown(with: event) }    // Esc
+        switch event.keyCode {
+        case 53: pin?.closePin()                    // Esc
+        case 49: pin?.beginAnnotating()             // 空格：进标注（Snipaste 的习惯）
+        default: super.keyDown(with: event)
+        }
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard let pin, event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+        // 标注中：⌘W/⌘C 这些不作用在贴图上，交给标注画板（⌘Z 撤销等）
+        guard let pin, !pin.isAnnotating, event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
               let key = event.charactersIgnoringModifiers?.lowercased() else {
             return super.performKeyEquivalent(with: event)
         }

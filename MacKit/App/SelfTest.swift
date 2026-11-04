@@ -36,6 +36,7 @@ enum SelfTest {
         testAnnotationExport()
         testEditingFlow()
         testTextEditing()
+        testPinAnnotation()
 
         print(failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED (\(failures))")
         exit(failures == 0 ? 0 : 1)
@@ -132,13 +133,13 @@ enum SelfTest {
         check(pin.frame.size == CGSize(width: 200, height: 150) && pin.scale == 1, "恢复原始大小")
 
         let before = pin.scale
-        if let view = pin.contentView, let wheel = scrollEvent(lines: 1, option: false) {
+        if let view = pin.pinView, let wheel = scrollEvent(lines: 1, option: false) {
             view.scrollWheel(with: wheel)
             check(abs(pin.scale - before) > 0.05 && abs(pin.alphaValue - 1) < 0.001, "滚轮一格 → 缩放变了、透明度没变")
         } else { check(false, "造滚轮事件") }
         let scaleNow = pin.scale
         pin.setOpacity(0.5)          // 从 50% 开始，往哪边滚都看得出变化
-        if let view = pin.contentView, let wheel = scrollEvent(lines: 1, option: true) {
+        if let view = pin.pinView, let wheel = scrollEvent(lines: 1, option: true) {
             view.scrollWheel(with: wheel)
             check(pin.scale == scaleNow && abs(pin.alphaValue - 0.5) > 0.01, "⌥ + 滚轮 → 透明度变了、缩放没变")
         } else { check(false, "造 ⌥ 滚轮事件") }
@@ -487,6 +488,89 @@ enum SelfTest {
         editor.commitText()
         check(editor.document.items.first?.color == .blue && editor.document.items.first?.size == .thick,
               "改字时换颜色和粗细，改完生效")
+    }
+
+    // MARK: 贴图上的标注（台阶 3 第二批）
+
+    private static func testPinAnnotation() {
+        let image = makeTestImage(width: 400, height: 300)
+        let pin = PinWindow(image: image, pointSize: NSSize(width: 200, height: 150),
+                            frame: CGRect(x: 100, y: 100, width: 200, height: 150), scale: 1)
+        var closed = false
+        pin.onClosed = { _ in closed = true }
+        pin.zoom(to: 2, anchor: CGPoint(x: 100, y: 100))
+        check(pin.makeContextMenu().items.first?.title == "标注（空格）", "贴图右键菜单第一项是「标注」")
+        let isRed = { (p: (r: Int, g: Int, b: Int)) in p.r > 200 && p.g < 110 && p.b < 110 }
+
+        // 第一次标注：在放大 2 倍的贴图上画框，按回车
+        pin.beginAnnotating(present: false)
+        guard let first = pin.annotationSession else { check(false, "进入标注"); return }
+        first.editor.setColor(.red)          // 不依赖你上次选的颜色
+        check(pin.isAnnotating && first.editor.toolbar.mode == .pin && !first.editor.toolbar.hasPinAndSave,
+              "进入标注；贴图用的工具栏没有 📌 和 💾")
+        first.input.keyDown(with: key("r", code: 15))
+        first.input.mouseDown(with: mouse(.leftMouseDown, 100, 100))
+        first.input.mouseDragged(with: mouse(.leftMouseDragged, 150, 150))
+        first.input.mouseUp(with: mouse(.leftMouseUp, 200, 200))
+        check(first.editor.document.items.first?.box == CGRect(x: 50, y: 50, width: 50, height: 50),
+              "放大 2 倍的贴图上画框，位置换算回原图")
+        first.input.scrollWheel(with: scrollEvent(lines: 1, option: false)!)
+        check(pin.scale == 2, "标注时滚轮不会缩放贴图")
+        _ = pin.performKeyEquivalent(with: key("w", code: 13, mods: .command))
+        check(!closed && pin.isAnnotating, "标注时 ⌘W 不会把贴图关掉")
+        first.input.keyDown(with: key("\r", code: 36))
+        check(!pin.isAnnotating && pin.document.items.count == 1, "回车完成，标注留在贴图上")
+        check(pin.image !== pin.originalImage && isRed(pixel(pin.image, x: 100, y: 150)),
+              "贴图合成了标注（复制、另存拿到的是带标注的图）")
+
+        // 第二次：之前画的还在；画个椭圆后按 Esc → 只放弃这一次
+        pin.beginAnnotating(present: false)
+        guard let second = pin.annotationSession else { check(false, "再次进入标注"); return }
+        second.editor.setColor(.red)          // 不依赖你上次选的颜色
+        check(second.editor.document.items.count == 1, "再进标注，之前画的都还在")
+        second.input.keyDown(with: key("e", code: 14))
+        second.input.mouseDown(with: mouse(.leftMouseDown, 250, 50))
+        second.input.mouseUp(with: mouse(.leftMouseUp, 350, 150))
+        check(second.editor.document.items.count == 2, "又画了一个椭圆")
+        second.input.keyDown(with: key("\u{1b}", code: 53))
+        check(!pin.isAnnotating && pin.document.items.count == 1 && pin.document.items[0].tool == .rect,
+              "Esc：这次画的椭圆没了，之前的框还在")
+
+        // 第三次：⌘Z 能撤销之前画的
+        pin.beginAnnotating(present: false)
+        guard let third = pin.annotationSession else { check(false, "第三次进入标注"); return }
+        third.editor.setColor(.red)          // 不依赖你上次选的颜色
+        check(third.editor.document.canUndo, "之前画的也能撤销")
+        _ = third.input.performKeyEquivalent(with: key("z", code: 6, mods: .command))
+        check(third.editor.document.items.isEmpty, "⌘Z 撤销了上次画的框")
+        third.input.keyDown(with: key("\r", code: 36))
+        check(pin.document.items.isEmpty && pin.image === pin.originalImage, "撤销光了再完成，贴图恢复成原图")
+
+        // 第四次：在贴图上打中文；恢复原始大小后标注还在
+        pin.beginAnnotating(present: false)
+        guard let fourth = pin.annotationSession else { check(false, "第四次进入标注"); return }
+        fourth.editor.setColor(.red)          // 不依赖你上次选的颜色
+        fourth.input.keyDown(with: key("t", code: 17))
+        fourth.input.mouseDown(with: mouse(.leftMouseDown, 40, 160))     // 避开假图片顶部的红带
+        fourth.editor.textView?.insertText("你好", replacementRange: NSRange(location: NSNotFound, length: 0))
+        fourth.editor.commitText()
+        fourth.input.keyDown(with: key("\r", code: 36))
+        let text = pin.document.items.first
+        check(text?.tool == .text && text?.text == "你好" && text?.points.first == CGPoint(x: 20, y: 80),
+              "贴图上打中文，位置换算回原图")
+        pin.resetSize()
+        check(pin.scale == 1 && pin.document.items.count == 1, "恢复原始大小，标注还在")
+        if let t = text {
+            let r = AnnotationText.rect(for: t)
+            var hits = 0
+            for y in stride(from: r.minY, to: r.maxY, by: 1) {
+                for x in stride(from: r.minX, to: r.maxX, by: 1) {
+                    if isRed(pixel(pin.image, x: Int(x * 2), y: Int((150 - y) * 2))) { hits += 1 }
+                }
+            }
+            check(hits > 10, "合成图里文字在它该在的位置")
+        }
+        pin.closePin()
     }
 
     // MARK: 工具

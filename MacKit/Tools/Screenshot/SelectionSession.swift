@@ -33,23 +33,28 @@ final class OverlayWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
-    /// MacKit 没有"编辑"菜单，打字时 ⌘V/⌘C/⌘X/⌘A/⌘Z 要自己转给文本框
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        TextEditingKeys.handle(event, firstResponder: firstResponder) || super.performKeyEquivalent(with: event)
+    }
+}
+
+/// MacKit 没有"编辑"菜单，打字时 ⌘V/⌘C/⌘X/⌘A/⌘Z 要自己转给文本框
+@MainActor
+enum TextEditingKeys {
+    static func handle(_ event: NSEvent, firstResponder: NSResponder?) -> Bool {
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if let tv = firstResponder as? NSTextView, mods.contains(.command),
-           let key = event.charactersIgnoringModifiers?.lowercased() {
-            switch (key, mods.contains(.shift)) {
-            case ("v", _): tv.paste(nil)
-            case ("c", _): tv.copy(nil)
-            case ("x", _): tv.cut(nil)
-            case ("a", _): tv.selectAll(nil)
-            case ("z", false): tv.undoManager?.undo()
-            case ("z", true): tv.undoManager?.redo()
-            default: return super.performKeyEquivalent(with: event)
-            }
-            return true
+        guard let tv = firstResponder as? NSTextView, mods.contains(.command),
+              let key = event.charactersIgnoringModifiers?.lowercased() else { return false }
+        switch (key, mods.contains(.shift)) {
+        case ("v", _): tv.paste(nil)
+        case ("c", _): tv.copy(nil)
+        case ("x", _): tv.cut(nil)
+        case ("a", _): tv.selectAll(nil)
+        case ("z", false): tv.undoManager?.undo()
+        case ("z", true): tv.undoManager?.redo()
+        default: return false
         }
-        return super.performKeyEquivalent(with: event)
+        return true
     }
 }
 
