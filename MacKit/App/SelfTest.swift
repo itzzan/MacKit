@@ -37,6 +37,7 @@ enum SelfTest {
         testEditingFlow()
         testTextEditing()
         testPinAnnotation()
+        testClipboard()
 
         print(failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED (\(failures))")
         exit(failures == 0 ? 0 : 1)
@@ -571,6 +572,179 @@ enum SelfTest {
             check(hits > 10, "合成图里文字在它该在的位置")
         }
         pin.closePin()
+    }
+
+    // MARK: 剪贴板历史（台阶 4）。全程用私有剪贴板和临时文件夹，不碰你真正的剪贴板和历史
+
+    private static func testClipboard() {
+        let pb = NSPasteboard(name: NSPasteboard.Name("local.mackit.selftest.clip.\(UUID().uuidString)"))
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mackit-clip-\(UUID().uuidString)")
+        defer { pb.releaseGlobally(); try? FileManager.default.removeItem(at: dir) }
+        func read() -> Result<ClipboardSnapshot, ClipboardReader.Skip> { ClipboardReader.read(pb, source: nil) }
+        func snap() -> ClipboardSnapshot? { if case .success(let s) = read() { return s }; return nil }
+
+        // 1. 读：文字、带格式、图片、文件
+        pb.clearContents(); pb.setString("你好 MacKit", forType: .string)
+        check(snap()?.kind == .text && snap()?.title == "你好 MacKit", "记文字")
+        let rich = NSAttributedString(string: "粗体字", attributes: [.font: NSFont.boldSystemFont(ofSize: 14)])
+        pb.clearContents()
+        pb.declareTypes([.rtf, .string], owner: nil)
+        pb.setData(try? rich.data(from: NSRange(location: 0, length: rich.length),
+                                  documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]), forType: .rtf)
+        pb.setString("粗体字", forType: .string)
+        check(snap()?.kind == .richText, "记带格式的文字（格式也记下）")
+        let image = makeTestImage(width: 400, height: 300)
+        let png = ImageOutput.pngData(of: image, pointSize: NSSize(width: 200, height: 150)) ?? Data()
+        pb.clearContents(); pb.setData(png, forType: .png)
+        let img = snap()
+        check(img?.kind == .image && img?.imagePixelSize == CGSize(width: 400, height: 300) && img?.title == "图片 400×300",
+              "记图片（截图也会记）")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("报告.txt")
+        try? "内容".write(to: file, atomically: true, encoding: .utf8)
+        pb.clearContents(); pb.writeObjects([file as NSURL])
+        check(snap()?.kind == .file && snap()?.title == "报告.txt", "记访达里复制的文件")
+
+        // 2. 不记的：保密、临时、密码管理器、MacKit 自己放回去的、超过 20 MB、空的
+        for marker in ["org.nspasteboard.ConcealedType", "org.nspasteboard.TransientType", "com.agilebits.onepassword"] {
+            pb.clearContents()
+            pb.declareTypes([.string, NSPasteboard.PasteboardType(marker)], owner: nil)
+            pb.setString("密码 123456", forType: .string)
+            pb.setData(Data(), forType: NSPasteboard.PasteboardType(marker))
+            if case .failure(.ignored) = read() {} else { check(false, "跳过 \(marker)") }
+        }
+        check(true, "密码管理器复制的（保密 / 临时标记）不记")
+        pb.clearContents()
+        pb.declareTypes([.string, ClipboardReader.restoreMarker], owner: nil)
+        pb.setString("x", forType: .string); pb.setData(Data(), forType: ClipboardReader.restoreMarker)
+        if case .failure(.ownRestore) = read() { check(true, "MacKit 自己放回去的不再记一遍") } else { check(false, "MacKit 自己放回去的不再记一遍") }
+        pb.clearContents(); pb.setData(Data(count: 21 * 1024 * 1024), forType: NSPasteboard.PasteboardType("public.data"))
+        if case .failure(.tooBig) = read() { check(true, "超过 20 MB 的不记") } else { check(false, "超过 20 MB 的不记") }
+        pb.clearContents()
+        if case .failure(.empty) = read() { check(true, "空剪贴板不记") } else { check(false, "空剪贴板不记") }
+
+        // 3. 存：顺序、去重、置顶、上限、删除、清空、存盘
+        let store = ClipboardStore(directory: dir.appendingPathComponent("store"), limit: 5)
+        func addText(_ t: String, _ minute: Double) -> ClipboardItem? {
+            pb.clearContents(); pb.setString(t, forType: .string)
+            guard let s = snap() else { return nil }
+            return store.add(s, now: Date(timeIntervalSince1970: 1_800_000_000 + minute * 60))
+        }
+        let a = addText("甲", 1), b = addText("乙", 2), _ = addText("丙", 3)
+        check(store.items.map(\.title) == ["丙", "乙", "甲"], "最新复制的在最上面")
+        _ = addText("甲", 4)
+        check(store.items.map(\.title) == ["甲", "丙", "乙"] && store.items[0].copyCount == 2 && store.items[0].id == a?.id,
+              "同一段复制两次：不多一条，挪到最上面")
+        if let b { store.togglePin(b.id) }
+        _ = addText("丁", 5)
+        check(store.items.map(\.title) == ["乙", "丁", "甲", "丙"] && store.items[0].pinned, "置顶的一直在最上面")
+        for (i, t) in ["1", "2", "3", "4", "5", "6"].enumerated() { _ = addText("新\(t)", Double(10 + i)) }
+        check(store.unpinnedCount == 5 && store.items.first?.title == "乙", "超过上限删最旧的，置顶的不算、不删")
+        pb.clearContents(); pb.setData(png + Data(count: 40 * 1024), forType: .png)      // 大于 32 KB → 单独存成文件
+        let big = snap().map { store.add($0) }
+        let blobs = dir.appendingPathComponent("store/blobs")
+        let blobCount = { (try? FileManager.default.contentsOfDirectory(atPath: blobs.path).count) ?? 0 }
+        check(blobCount() >= 1 && big?.pasteboardItems.first?.first?.blob != nil, "大的内容单独存成文件")
+
+        let reloaded = ClipboardStore(directory: dir.appendingPathComponent("store"), limit: 5)
+        reloaded.load()
+        check(reloaded.items.map(\.id) == store.items.map(\.id), "退出再打开，历史和顺序都在")
+        if let entry = reloaded.items.first(where: { $0.id == big?.id })?.pasteboardItems.first?.first {
+            check(reloaded.data(of: entry)?.count == png.count + 40 * 1024, "单独存的大内容能读回来")
+        }
+        if let big { store.delete(big.id) }
+        check(blobCount() == 0 && !store.items.contains { $0.id == big?.id }, "删掉一条，它单独存的文件也删掉")
+        store.clearUnpinned()
+        check(store.items.count == 1 && store.items[0].title == "乙", "清空历史，置顶的保留")
+
+        // 4. 放回剪贴板：原样 / 纯文字 / 文件
+        let store2 = ClipboardStore(directory: dir.appendingPathComponent("store2"))
+        pb.clearContents(); pb.declareTypes([.rtf, .string], owner: nil)
+        pb.setData(try? rich.data(from: NSRange(location: 0, length: rich.length),
+                                  documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]), forType: .rtf)
+        pb.setString("粗体字", forType: .string)
+        guard let richItem = snap().map({ store2.add($0) }) else { check(false, "准备带格式文字"); return }
+        ClipboardPaster.write(richItem, plainText: false, store: store2, to: pb)
+        check(pb.types?.contains(.rtf) == true && pb.string(forType: .string) == "粗体字", "原样放回：格式还在")
+        if case .failure(.ownRestore) = read() { check(true, "放回去的带着 MacKit 的标记，不会再记一遍") } else { check(false, "放回去的带着标记") }
+        ClipboardPaster.write(richItem, plainText: true, store: store2, to: pb)
+        check(pb.types?.contains(.rtf) == false && pb.string(forType: .string) == "粗体字", "⇧回车：只放纯文字，格式去掉")
+        pb.clearContents(); pb.writeObjects([file as NSURL])
+        if let fileItem = snap().map({ store2.add($0) }) {
+            ClipboardPaster.write(fileItem, plainText: false, store: store2, to: pb)
+            check(pb.string(forType: .fileURL).flatMap { URL(string: $0) }?.lastPathComponent == "报告.txt", "文件放回去还是那个文件")
+        }
+
+        // 5. 盯剪贴板：变了才读；暂停时不记
+        let watchPB = NSPasteboard(name: NSPasteboard.Name("local.mackit.selftest.watch.\(UUID().uuidString)"))
+        defer { watchPB.releaseGlobally() }
+        let watcher = ClipboardWatcher(pasteboard: watchPB)
+        var seen = 0, paused = false
+        watcher.onSnapshot = { _ in seen += 1 }
+        watcher.isPaused = { paused }
+        watchPB.clearContents(); watchPB.setString("一", forType: .string); watcher.check()
+        watcher.check()
+        check(seen == 1, "剪贴板变了才记，没变不重复记")
+        paused = true
+        watchPB.clearContents(); watchPB.setString("二", forType: .string); watcher.check()
+        check(seen == 1, "暂停记录时复制的不记")
+        paused = false
+        watchPB.clearContents(); watchPB.setString("三", forType: .string); watcher.check()
+        check(seen == 2, "取消暂停后恢复记录")
+
+        // 6. 小窗口（只造不显示）：搜索、上下选、回车、⌥数字、⌘P、⌘⌫、⌘2
+        let tool = ClipboardTool(store: store2, pasteboard: watchPB)
+        for (i, t) in ["你好世界", "MacKit 工具箱", "第三条"].enumerated() {
+            pb.clearContents(); pb.setString(t, forType: .string)
+            if let s = snap() { store2.add(s, now: Date().addingTimeInterval(Double(i))) }
+        }
+        let panel = tool.makePanel()
+        var pasted: [(String, Bool)] = []
+        panel.onPaste = { item, plain in pasted.append((item.title, plain)) }
+        panel.show(near: CGPoint(x: 400, y: 400), present: false)
+        defer { panel.close(returnFocus: false) }
+        check(ClipboardPanel.visible === panel && panel.shown.count == store2.items.count && panel.selectedIndex == 0,
+              "弹出时列出全部，选中第一条")
+        panel.searchField.stringValue = "世界"
+        panel.reload()
+        check(panel.shown.map(\.title) == ["你好世界"], "打字搜索，边打边筛")
+        panel.searchField.stringValue = ""
+        panel.reload()
+        _ = panel.control(panel.searchField, textView: NSTextView(), doCommandBy: #selector(NSResponder.moveDown(_:)))
+        check(panel.selectedIndex == 1, "↓ 选下一条")
+        _ = panel.control(panel.searchField, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:)))
+        check(pasted.last.map { $0.0 == panel.shown[1].title && !$0.1 } ?? false, "回车粘贴选中的那条")
+        panel.show(near: CGPoint(x: 400, y: 400), present: false)
+        _ = panel.handleKey(key("2", code: 19, mods: .option))
+        check(pasted.last?.0 == panel.shown[1].title, "⌥2 直接粘贴第 2 条")
+        panel.show(near: CGPoint(x: 400, y: 400), present: false)
+        _ = panel.handleKey(key("\r", code: 36, mods: .shift))
+        check(pasted.last?.1 == true, "⇧回车 = 只粘贴纯文字")
+        panel.show(near: CGPoint(x: 400, y: 400), present: false)
+        panel.select(2)
+        let third = panel.selectedItem
+        _ = panel.handleKey(key("p", code: 35, mods: .command))
+        check(store2.items.first?.id == third?.id && store2.items.first?.pinned == true && panel.shown.first?.id == third?.id,
+              "⌘P 置顶")
+        let before = store2.items.count
+        panel.select(1)
+        _ = panel.handleKey(key("\u{8}", code: 51, mods: .command))
+        check(store2.items.count == before - 1, "⌘⌫ 删除选中的那条")
+        var pinnedContent: PinContent?
+        tool.onPin = { pb in pinnedContent = PinContentReader.read(pb) }
+        panel.onPin = { item in tool.makePanel().onPin?(item) }
+        panel.select(0)
+        panel.requestPin()
+        if case .text(let t)? = pinnedContent { check(!t.isEmpty, "⌘2 把选中的那条钉成贴图") } else { check(false, "⌘2 钉成贴图") }
+        check(ClipboardPanel.visible == nil, "粘贴或贴图后小窗口关掉")
+
+        let row = ClipboardRowView()
+        if let pinned = store2.items.first(where: \.pinned) {
+            row.configure(item: pinned, icon: NSImage(), shortcut: "⌥1")
+            check(row.titleText.hasPrefix("📌"), "置顶的那条有图钉标记")
+        }
+        let thumb = ClipboardPanel.thumbnail(png)
+        check(thumb != nil && (thumb?.size.width ?? 99) <= 48, "图片在列表里显示成小缩略图")
     }
 
     // MARK: 工具

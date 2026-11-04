@@ -35,9 +35,10 @@ MacKit/
     Screenshot/   截图：冻屏、选区覆盖层、坐标换算、复制和保存
     Pin/          贴图：贴图窗口、缩放透明度、读剪贴板、文字卡片、贴图上标注
     Annotate/     标注：八种工具、工具栏、撤销重做、马赛克、导出
+    Clipboard/    剪贴板历史：盯剪贴板、跳过密码、存盘、小窗口、自动粘贴
   Resources/      Info.plist
 Config/           签名设置（Local.xcconfig 是本机私有的）
-Tests/            坐标换算、贴图缩放、选区调整的单元测试
+Tests/            坐标换算、贴图缩放、选区调整、剪贴板文字的单元测试
 scripts/          编译、测试、安装脚本
 project.yml       Xcode 工程的生成规则
 ```
@@ -66,3 +67,12 @@ tccutil reset ScreenCapture local.mackit.MacKit
 ```bash
 defaults read local.mackit.MacKit
 ```
+
+## 剪贴板历史存在哪
+
+```bash
+open ~/Library/Application\ Support/MacKit/Clipboard
+```
+
+index.json 是列表，blobs/ 里是图片等大内容。只存在这台电脑上。
+

@@ -9,6 +9,7 @@ echo "▸ 坐标单元测试"
 xcrun swiftc -swift-version 5 -target arm64-apple-macos15.0 -sdk "$(xcrun --show-sdk-path)" \
   -o "$OUT/GeometryTests" "$ROOT/MacKit/Tools/Screenshot/Geometry.swift" \
   "$ROOT/MacKit/Tools/Pin/PinGeometry.swift" "$ROOT/MacKit/Tools/Annotate/EditGeometry.swift" \
+  "$ROOT/MacKit/Tools/Clipboard/ClipboardText.swift" \
   "$ROOT/Tests/main.swift"
 "$OUT/GeometryTests"
 

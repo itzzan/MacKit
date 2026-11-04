@@ -80,6 +80,18 @@ enum PinHotKeyPresets {
     ]
 }
 
+/// 剪贴板历史的呼出快捷键。第一个是默认值（2026-11-04 用户选的 ⌘3）
+enum ClipboardHotKeyPresets {
+    static let all: [HotKeyCombo] = [
+        HotKeyCombo(keyCode: UInt32(kVK_ANSI_3), carbonModifiers: UInt32(cmdKey),
+                    display: "⌘3", menuKey: "3", menuModifiers: [.command], note: "接着截图 ⌘1、贴图 ⌘2"),
+        HotKeyCombo(keyCode: UInt32(kVK_ANSI_V), carbonModifiers: UInt32(cmdKey | shiftKey),
+                    display: "⇧⌘V", menuKey: "v", menuModifiers: [.command, .shift], note: "有些软件里它是「粘贴为纯文本」"),
+        HotKeyCombo(keyCode: UInt32(kVK_ANSI_C), carbonModifiers: UInt32(cmdKey | shiftKey),
+                    display: "⇧⌘C", menuKey: "c", menuModifiers: [.command, .shift], note: "Maccy 的默认"),
+    ]
+}
+
 /// 用户设置，存在 UserDefaults（defaults read local.mackit.MacKit 可查看）
 @MainActor
 enum Settings {
@@ -138,6 +150,27 @@ enum Settings {
     static var annotationSizeIndex: Int {
         get { store.object(forKey: "annotate.size") as? Int ?? 1 }
         set { store.set(newValue, forKey: "annotate.size") }
+    }
+
+    static var clipboardHotKeyIndex: Int {
+        get {
+            let index = store.integer(forKey: "clipboard.hotkeyIndex")
+            return ClipboardHotKeyPresets.all.indices.contains(index) ? index : 0
+        }
+        set { store.set(newValue, forKey: "clipboard.hotkeyIndex") }
+    }
+
+    static var clipboardHotKey: HotKeyCombo { ClipboardHotKeyPresets.all[clipboardHotKeyIndex] }
+
+    /// 暂停记录剪贴板（重启后也保持）
+    static var clipboardPaused: Bool {
+        get { store.bool(forKey: "clipboard.paused") }
+        set { store.set(newValue, forKey: "clipboard.paused") }
+    }
+
+    static var askedAccessibility: Bool {
+        get { store.bool(forKey: "permission.askedAccessibility") }
+        set { store.set(newValue, forKey: "permission.askedAccessibility") }
     }
 
     static var askedScreenPermission: Bool {

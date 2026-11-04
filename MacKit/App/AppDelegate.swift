@@ -19,7 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private let screenshot = ScreenshotTool()
     private let pin = PinTool()
-    private lazy var modules: [ToolModule] = [screenshot, pin]
+    private let clipboard = ClipboardTool()
+    private lazy var modules: [ToolModule] = [screenshot, pin, clipboard]
     private(set) var emergencyQuitRegistered = false
 
     init(selfTest: Bool) {
@@ -41,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = item
 
         screenshot.onPin = { [weak self] result in self?.pin.pin(result) }
+        clipboard.onPin = { [weak self] pb in self?.pin.pinFromPasteboard(pb) }
         for module in modules { module.activate() }
         emergencyQuitRegistered = HotKeyCenter.shared.register(EmergencyHotKey.quit) {
             Log.app.notice("emergency quit")

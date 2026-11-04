@@ -110,5 +110,23 @@ check(head.tip == CGPoint(x: 100, y: 0) && head.left == CGPoint(x: 84, y: 8) && 
       "箭头头部：尖在终点，两翼对称")
 check(abs(head.shaftEnd.x - 87.2) < 0.001, "箭杆画到箭头里面一点，接缝不露白")
 
+// 台阶 4：剪贴板历史里的文字处理
+check(ClipboardText.title(from: "  你好\n\n  MacKit\t世界  ") == "你好 MacKit 世界", "列表标题：换行和多余空白压成一个空格")
+check(ClipboardText.title(from: String(repeating: "字", count: 300)).count == 201, "列表标题最多 200 字，后面加省略号")
+check(ClipboardText.matches("mac", in: "你好 MacKit"), "搜索不分大小写")
+check(ClipboardText.matches("世界", in: "你好世界"), "搜索中文")
+check(ClipboardText.matches("abc", in: "ＡＢＣ全角"), "搜索不分全角半角")
+check(ClipboardText.matches("  ", in: "随便"), "空搜索 = 全部显示")
+check(!ClipboardText.matches("没有", in: "你好世界"), "搜不到的不显示")
+var cal = Calendar(identifier: .gregorian)
+cal.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+let now = cal.date(from: DateComponents(year: 2026, month: 11, day: 4, hour: 15))!
+check(ClipboardText.relativeTime(now.addingTimeInterval(-30), now: now, calendar: cal) == "刚刚", "30 秒前 → 刚刚")
+check(ClipboardText.relativeTime(now.addingTimeInterval(-300), now: now, calendar: cal) == "5 分钟前", "5 分钟前")
+check(ClipboardText.relativeTime(now.addingTimeInterval(-3 * 3600), now: now, calendar: cal) == "3 小时前", "同一天 → 几小时前")
+check(ClipboardText.relativeTime(now.addingTimeInterval(-20 * 3600), now: now, calendar: cal) == "昨天", "昨天")
+check(ClipboardText.relativeTime(cal.date(from: DateComponents(year: 2026, month: 10, day: 28, hour: 9))!, now: now, calendar: cal) == "10-28",
+      "更早 → 月-日")
+
 print(failures == 0 ? "UNIT TESTS OK" : "UNIT TESTS FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)

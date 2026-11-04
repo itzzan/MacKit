@@ -27,8 +27,22 @@ final class PinTool: ToolModule {
             if session.isEditing { session.finishPin() }
             return                      // 还在框选时不贴，免得贴图被冻住的画面挡住
         }
+        // 剪贴板历史开着：⌘2 = 把选中的那条钉成贴图
+        if let panel = ClipboardPanel.visible {
+            panel.requestPin()
+            return
+        }
         guard let content = PinContentReader.read(.general) else {
             Toast.show("剪贴板里没有图片或文字")
+            return
+        }
+        show(makePin(for: content, mouse: NSEvent.mouseLocation))
+    }
+
+    /// 从剪贴板历史贴：读那块私有剪贴板里的内容
+    func pinFromPasteboard(_ pb: NSPasteboard) {
+        guard let content = PinContentReader.read(pb) else {
+            Toast.show("这条内容贴不出来（不是图片也不是文字）")
             return
         }
         show(makePin(for: content, mouse: NSEvent.mouseLocation))
