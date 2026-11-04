@@ -41,6 +41,11 @@ final class ToolbarButton: NSButton {
 
     @MainActor @objc private func fire() { handler() }
 
+    func setTitle(_ title: String) {
+        attributedTitle = NSAttributedString(string: " " + title, attributes: [
+            .font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: NSColor.white])
+    }
+
     func setSymbol(_ symbol: String, tip: String) {
         image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)?
             .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))

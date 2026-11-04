@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import ImageIO
 import CoreMedia
 
 /// 自检：MacKit --selftest
@@ -42,6 +43,7 @@ enum SelfTest {
         testPinAnnotation()
         testClipboard()
         testRecorder(recorder)
+        testRecordingExtras(recorder)
 
         print(failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED (\(failures))")
         exit(failures == 0 ? 0 : 1)
@@ -758,8 +760,8 @@ enum SelfTest {
         check(Bundle.main.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") != nil,
               "App 里写明了麦克风用途（没写的话一要麦克风权限就会闪退）")
         let titles = tool.menuItems().map(\.title)
-        check(titles.contains { $0.hasPrefix("录屏（") } && titles.contains("录屏画质") && titles.contains("录屏保存位置"),
-              "菜单里有录屏、画质、保存位置")
+        check(titles.contains { $0.hasPrefix("录屏（") } && titles.contains("录屏设置"),
+              "菜单里有录屏和录屏设置（画质、保存位置、快捷键、录完自动打开预览）")
 
         // 选区 → 录哪里
         guard let screen = NSScreen.main else { check(false, "有屏幕"); return }
@@ -821,16 +823,18 @@ enum SelfTest {
 
         // 录制前后的界面（只造不显示）
         let bar = RecordingControlBar(systemAudio: true, microphone: false)
-        check(bar.buttons.count == 4 && bar.systemAudio && !bar.microphone, "控制条：系统声音、麦克风、开始、取消四个按钮")
+        check(bar.buttons.count == 6 && bar.systemAudio && !bar.microphone,
+              "控制条：系统声音、麦克风、录多久自动停、几点开始、开始、取消六个按钮")
         let region2 = CGRect(x: 200, y: 200, width: 300, height: 200)
-        let border = RecordingBorderWindow(region: region2)
-        check(border.panel.frame == region2.insetBy(dx: -6, dy: -6) && border.panel.ignoresMouseEvents,
+        let border = RecordingBorderWindow(region: region2, screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+                                           adjustable: false)
+        check(border.panel.frame == region2.insetBy(dx: -12, dy: -12) && border.panel.ignoresMouseEvents,
               "红色虚线框画在区域外面、鼠标能穿过去，不会录进画面")
         let hud = RecordingHUD(systemAudio: true, microphone: true)
         var stopped = 0
         hud.onStop = { stopped += 1 }
         hud.update("00:42")
-        hud.stopButton.performClick(nil)
+        hud.buttons["stop"]?.performClick(nil)
         check(hud.timeText == "00:42" && stopped == 1 && hud.panel.frame.width > 150 && hud.panel.frame.height >= 36,
               "录制小条：显示时长，点「停止」就停（\(Int(hud.panel.frame.width))×\(Int(hud.panel.frame.height)) 点）")
         check(hud.panel.isMovableByWindowBackground && !hud.panel.canHide, "录制小条能拖走，MacKit 藏起来时它还在")
@@ -839,6 +843,167 @@ enum SelfTest {
         tool.reset()
         check(tool.state == .idle && indicator == nil, "取消录屏：回到空闲，菜单栏图标换回扳手")
         tool.onIndicator = nil
+    }
+
+    // MARK: 录屏加料第一批（台阶 6）：拼接、剪辑、GIF 用造出来的假视频测；界面只造不显示
+
+    private static func testRecordingExtras(_ tool: RecorderTool) {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mackit-extras-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let a = dir.appendingPathComponent("a.mp4"), b = dir.appendingPathComponent("b.mp4")
+        let big = dir.appendingPathComponent("big.mp4")
+        let semaphore = DispatchSemaphore(value: 0)
+        var results: [String: Any] = [:]
+        Task.detached {
+            do {
+                try await writeTestVideo(to: a, seconds: 1.0, size: CGSize(width: 320, height: 240), hue: 0.0)
+                try await writeTestVideo(to: b, seconds: 1.5, size: CGSize(width: 320, height: 240), hue: 0.6)
+                try await writeTestVideo(to: big, seconds: 2.0, size: CGSize(width: 1600, height: 900), hue: 0.3)
+                let merged = dir.appendingPathComponent("merged.mp4")
+                try await VideoTools.concatenate([a, b], to: merged)
+                results["merged"] = await VideoTools.duration(of: merged)
+                results["mergedTracks"] = (try? await AVURLAsset(url: merged).loadTracks(withMediaType: .video).count) ?? 0
+                let trimmed = dir.appendingPathComponent("trimmed.mp4")
+                try await VideoTools.trim(merged, range: CMTimeRange(start: CMTime(seconds: 0.5, preferredTimescale: 600),
+                                                                     end: CMTime(seconds: 2.0, preferredTimescale: 600)), to: trimmed)
+                results["trimmed"] = await VideoTools.duration(of: trimmed)
+                let gif = dir.appendingPathComponent("big.gif")
+                results["gifFrames"] = try await VideoTools.makeGIF(from: big, to: gif)
+                if let src = CGImageSourceCreateWithURL(gif as CFURL, nil) {
+                    results["gifCount"] = CGImageSourceGetCount(src)
+                    let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+                    results["gifWidth"] = props?[kCGImagePropertyPixelWidth] as? Int ?? 0
+                    let file = CGImageSourceCopyProperties(src, nil) as? [CFString: Any]
+                    results["gifLoop"] = (file?[kCGImagePropertyGIFDictionary] as? [CFString: Any])?[kCGImagePropertyGIFLoopCount] as? Int ?? -1
+                }
+                let gifPart = dir.appendingPathComponent("part.gif")
+                results["gifPart"] = try await VideoTools.makeGIF(from: big, range: CMTimeRange(start: .zero,
+                                                                  duration: CMTime(seconds: 1, preferredTimescale: 600)), to: gifPart)
+            } catch {
+                results["error"] = error.localizedDescription
+            }
+            semaphore.signal()
+        }
+        while semaphore.wait(timeout: .now()) == .timedOut { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        if let e = results["error"] { check(false, "造假视频 / 处理视频出错：\(e)") }
+        let merged = results["merged"] as? Double ?? 0
+        check(abs(merged - 2.5) < 0.15 && results["mergedTracks"] as? Int == 1,
+              "暂停后的几段拼成一个文件：1 秒 + 1.5 秒 = \(String(format: "%.2f", merged)) 秒")
+        let trimmed = results["trimmed"] as? Double ?? 0
+        check(abs(trimmed - 1.5) < 0.35, "剪掉开头 0.5 秒、只留到 2 秒：剩 \(String(format: "%.2f", trimmed)) 秒")
+        check(results["gifFrames"] as? Int == 20 && results["gifCount"] as? Int == 20, "2 秒视频存成 GIF：每秒 10 帧，共 20 帧")
+        check(results["gifWidth"] as? Int == 800, "GIF 缩到 800 像素宽（原视频 1600 宽）")
+        check(results["gifLoop"] as? Int == 0, "GIF 循环播放")
+        check(results["gifPart"] as? Int == 10, "剪过的只转剪好的那段：1 秒 = 10 帧")
+
+        // 录制小条四种样子
+        let hud = RecordingHUD(systemAudio: true, microphone: false)
+        var calls: [String] = []
+        hud.onPause = { calls.append("pause") }
+        hud.onResume = { calls.append("resume") }
+        hud.onStartNow = { calls.append("startNow") }
+        hud.onCancel = { calls.append("cancel") }
+        hud.onStop = { calls.append("stop") }
+        hud.buttons["pause"]?.performClick(nil)
+        hud.setMode(.paused); hud.buttons["resume"]?.performClick(nil)
+        hud.setMode(.waiting); hud.buttons["startNow"]?.performClick(nil); hud.buttons["cancel"]?.performClick(nil)
+        check(calls == ["pause", "resume", "startNow", "cancel"], "录制小条：暂停、继续、现在开始、取消都能点")
+        hud.setMode(.saving)
+        check(hud.mode == .saving, "录制小条：保存中")
+
+        // 控制条：录多久自动停、几点开始
+        let bar = RecordingControlBar(systemAudio: true, microphone: false)
+        bar.setAutoStop(minutes: 5)
+        let later = Date().addingTimeInterval(120)
+        bar.setStart(at: later)
+        check(bar.autoStopMinutes == 5 && bar.startAt == later && bar.buttons.count == 6, "控制条：能选录 5 分钟自动停、2 分钟后开始")
+
+        // 定时流程：设了开始时间 → 等着；取消 → 回到空闲（不显示窗口、不真的录）
+        let region = RecordTarget.region(id: 1, screenFrame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+                                         viewRect: CGRect(x: 100, y: 100, width: 300, height: 200))
+        tool.showControlBar(for: region, present: false)
+        tool.controlBar?.setStart(at: Date().addingTimeInterval(600))
+        tool.startFromBar(region, present: false)
+        if case .scheduled(_, let at) = tool.state { check(at > Date(), "设了几点开始 → 先等着，不马上录") } else { check(false, "设了几点开始 → 先等着") }
+        let menuTitles = tool.menuItems().map(\.title)
+        check(menuTitles.contains("取消定时录制") && menuTitles.contains("现在就开始"), "等着时菜单里能「现在就开始」或「取消定时录制」")
+        tool.reset()
+        check(tool.state == .idle, "取消定时录制 → 回到空闲")
+
+        // 录制框能调（2026-11-04 第一批验收：录制框不能调大小）
+        let screen = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+        let frameWin = RecordingBorderWindow(region: CGRect(x: 200, y: 200, width: 400, height: 300), screenFrame: screen)
+        var changes = 0
+        frameWin.onChange = { _ in changes += 1 }
+        check(frameWin.beginDrag(at: CGPoint(x: 600, y: 200)), "鼠标在右下角小方块上 → 开始改大小")
+        frameWin.drag(to: CGPoint(x: 700, y: 150)); frameWin.endDrag()
+        check(frameWin.region == CGRect(x: 200, y: 150, width: 500, height: 350) && changes == 1, "拖右下角：框变大，左上角不动")
+        check(frameWin.beginDrag(at: CGPoint(x: 300, y: 500)), "鼠标在上边虚线上（不是小方块）→ 开始挪位置")
+        frameWin.drag(to: CGPoint(x: 320, y: 480)); frameWin.endDrag()
+        check(frameWin.region == CGRect(x: 220, y: 130, width: 500, height: 350), "拖虚线：整个框挪过去，大小不变")
+        check(!frameWin.beginDrag(at: CGPoint(x: 450, y: 300)), "框里面不算拖框（照常能点下面的软件）")
+        frameWin.beginDrag(at: CGPoint(x: 220, y: 300)); frameWin.drag(to: CGPoint(x: -500, y: 300)); frameWin.endDrag()
+        check(frameWin.region.minX == 0, "挪出屏幕外 → 停在屏幕边上")
+        frameWin.beginDrag(at: CGPoint(x: frameWin.region.maxX, y: frameWin.region.midY))
+        frameWin.drag(to: CGPoint(x: frameWin.region.minX + 5, y: frameWin.region.midY)); frameWin.endDrag()
+        check(frameWin.region.width >= 40, "缩得太小 → 最小 40 点宽")
+        frameWin.setAdjustable(false)
+        check(!frameWin.beginDrag(at: CGPoint(x: frameWin.region.maxX, y: frameWin.region.maxY)) && frameWin.panel.ignoresMouseEvents,
+              "开始倒数后框锁定，不能再调")
+        let chosen = RecordTarget.region(id: 1, screenFrame: CGRect(x: 1728, y: 0, width: 1512, height: 982),
+                                         viewRect: CGRect(x: 10, y: 10, width: 100, height: 100))
+        if case .region(_, _, let r) = RecorderTool.adjusted(chosen, to: CGRect(x: 1828, y: 50, width: 300, height: 200)) {
+            check(r == CGRect(x: 100, y: 50, width: 300, height: 200), "按调好的框录（换算回这块屏幕的坐标）")
+        } else { check(false, "按调好的框录") }
+        if case .window = RecorderTool.adjusted(.window(id: 9, globalFrame: .zero), to: CGRect(x: 0, y: 0, width: 10, height: 10)) {
+            check(true, "录窗口不受红框影响")
+        } else { check(false, "录窗口不受红框影响") }
+
+        // 预览窗口（只造不显示）
+        let preview = RecordingPreviewWindow(url: a)
+        preview.show(present: false)
+        preview.setTrim(CMTimeRange(start: .zero, duration: CMTime(seconds: 0.5, preferredTimescale: 600)))
+        check(preview.buttons.keys.sorted() == ["delete", "gif", "reveal", "save", "trim"] && preview.trimRange != nil,
+              "预览窗口：剪辑、保存、存成 GIF、在访达中显示、删掉")
+        preview.window.close()
+    }
+
+    /// 造一段纯色渐变的假视频（H.264、没有声音）
+    nonisolated private static func writeTestVideo(to url: URL, seconds: Double, size: CGSize, hue: CGFloat) async throws {
+        try? FileManager.default.removeItem(at: url)
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: Int(size.width), AVVideoHeightKey: Int(size.height)])
+        input.expectsMediaDataInRealTime = false
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: Int(size.width), kCVPixelBufferHeightKey as String: Int(size.height)])
+        writer.add(input)
+        writer.startWriting()
+        writer.startSession(atSourceTime: .zero)
+        let fps = 30
+        let frames = Int(seconds * Double(fps))
+        for i in 0..<frames {
+            while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(2)) }
+            guard let pool = adaptor.pixelBufferPool else { break }
+            var buffer: CVPixelBuffer?
+            CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
+            guard let pb = buffer else { continue }
+            CVPixelBufferLockBaseAddress(pb, [])
+            if let base = CVPixelBufferGetBaseAddress(pb) {
+                let shade = UInt8(40 + (i * 5) % 200)
+                let blue = UInt8(min(255, Int(hue * 255)))
+                let bytes = CVPixelBufferGetBytesPerRow(pb) * CVPixelBufferGetHeight(pb)
+                let p = base.assumingMemoryBound(to: UInt8.self)
+                for j in stride(from: 0, to: bytes, by: 4) { p[j] = blue; p[j + 1] = shade; p[j + 2] = 255 - shade; p[j + 3] = 255 }
+            }
+            CVPixelBufferUnlockBaseAddress(pb, [])
+            adaptor.append(pb, withPresentationTime: CMTime(value: CMTimeValue(i), timescale: CMTimeScale(fps)))
+        }
+        input.markAsFinished()
+        await writer.finishWriting()
+        if writer.status != .completed { throw writer.error ?? VideoToolError.exportUnavailable }
     }
 
     // MARK: 工具
@@ -899,7 +1064,8 @@ enum SelfTest {
 }
 
 /// 录屏冒烟测试：MacKit --record-smoke <结果文件>
-/// 真的录三次（不弹任何窗口、不开麦克风）：屏幕左上角一小块 2 秒、最前面的一个窗口 1.5 秒、整屏 1.5 秒。
+/// 真的录（不弹任何窗口、不开麦克风）：屏幕左上角一小块 2 秒、最前面的一个窗口 1.5 秒、整屏 1.5 秒，
+/// 再录两段各 1.5 秒拼起来（模拟暂停）并转成 GIF。
 /// 检查生成的 mp4 能不能读、尺寸时长对不对，然后删掉视频。要用 open 启动（这样"录屏权限"算在 MacKit 头上）
 @MainActor
 enum RecordSmokeTest {
@@ -927,6 +1093,41 @@ enum RecordSmokeTest {
             let r3 = await record(.display(id: id, screenFrame: screen.frame), seconds: 1.5)
             lines.append("整屏：" + r3.text)
             allOK = allOK && r3.ok && r3.size == CGSize(width: screen.frame.width * scale, height: screen.frame.height * scale)
+
+            // 暂停再继续 = 录两段再拼起来；再转成 GIF
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mackit-smoke-pause-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let target = RecordTarget.region(id: id, screenFrame: screen.frame, viewRect: viewRect)
+            var parts: [URL] = []
+            for i in 1...2 {
+                let url = dir.appendingPathComponent("part-\(i).mp4")
+                let r = ScreenRecorder(url: url)
+                do {
+                    try await r.start(target: target, options: RecordOptions(systemAudio: true, microphone: false, quality: .original60),
+                                      excluding: [])
+                    try? await Task.sleep(for: .seconds(1.5))
+                    await r.stop()
+                    parts.append(url)
+                } catch { lines.append("暂停拼接：第 \(i) 段没录成（\(error.localizedDescription)）") }
+                try? await Task.sleep(for: .seconds(0.5))           // 暂停的这半秒不该进视频
+            }
+            let merged = dir.appendingPathComponent("merged.mp4")
+            do {
+                try await VideoTools.concatenate(parts, to: merged)
+                let d = await VideoTools.duration(of: merged)
+                let audio = (try? await AVURLAsset(url: merged).loadTracks(withMediaType: .audio).count) ?? 0
+                lines.append("暂停拼接：两段各 1.5 秒 → \(String(format: "%.2f", d)) 秒，声音轨 \(audio)")
+                allOK = allOK && parts.count == 2 && abs(d - 3.0) < 0.6 && audio >= 1
+                let gif = dir.appendingPathComponent("merged.gif")
+                let frames = try await VideoTools.makeGIF(from: merged, to: gif)
+                let bytes = (try? FileManager.default.attributesOfItem(atPath: gif.path)[.size] as? Int) ?? 0
+                lines.append("存成 GIF：\(frames) 帧，\(bytes) 字节")
+                allOK = allOK && frames >= 25 && bytes > 0
+            } catch {
+                lines.append("暂停拼接失败：\(error.localizedDescription)")
+                allOK = false
+            }
             finish(lines, allOK, resultPath)
         }
     }

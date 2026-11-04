@@ -1,16 +1,44 @@
 import AppKit
 import AVFoundation
 
-/// 录屏积木：⌘4 选区域（框选 / 单击窗口 / 桌面单击整屏）→ 控制条 → 倒数 → 录制 → 再按 ⌘4 停止，存成 mp4
+/// 录屏积木：⌘4 选区域（框选 / 单击窗口 / 桌面单击整屏）→ 控制条（声音、录多久自动停、几点开始）→ 倒数 → 录制
+/// （能暂停 / 继续）→ 再按 ⌘4 或点小条上的停止 → 存成 mp4 → 提示里能预览剪辑、存成 GIF
 @MainActor
 final class RecorderTool: ToolModule {
     enum State: Equatable {
         case idle
         case choosing
         case ready(RecordTarget)
+        case scheduled(RecordTarget, Date)      // 等定时开始
         case countingDown
         case recording
+        case pausing                            // 正在把这一段收尾
+        case paused
         case stopping
+    }
+
+    /// 一次录制。暂停会把它分成好几段，停止后拼成一个文件
+    final class Job {
+        let target: RecordTarget
+        let options: RecordOptions
+        let autoStopMinutes: Int
+        let tempDirectory: URL
+        var segments: [URL] = []
+        var recordedBefore: TimeInterval = 0     // 已经收尾的那几段一共多长
+        var recorder: ScreenRecorder?
+        var lastError: Error?
+
+        init(target: RecordTarget, options: RecordOptions, autoStopMinutes: Int) {
+            self.target = target
+            self.options = options
+            self.autoStopMinutes = autoStopMinutes
+            tempDirectory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mackit-recording-\(UUID().uuidString)", isDirectory: true)
+        }
+
+        /// 录了多久（暂停的不算）
+        @MainActor var elapsed: TimeInterval { recordedBefore + (recorder?.duration ?? 0) }
+        var nextSegmentURL: URL { tempDirectory.appendingPathComponent("part-\(segments.count + 1).mp4") }
     }
 
     private(set) var state: State = .idle
@@ -19,14 +47,15 @@ final class RecorderTool: ToolModule {
     private(set) var hotKeyRegistered = false
     private var hotKeyID: UInt32?
     private var selection: SelectionSession?
-    private var controlBar: RecordingControlBar?
+    private(set) var controlBar: RecordingControlBar?
     private var border: RecordingBorderWindow?
     private var countdown: CountdownWindow?
     /// 录制中挂在区域旁边的小条（2026-11-04 验收：只有菜单栏红点，常常不知道在不在录）
     private(set) var hud: RecordingHUD?
-    private var recorder: ScreenRecorder?
+    private(set) var job: Job?
     private var ticker: Timer?
     private(set) var lastRecording: URL?
+    private var preview: RecordingPreviewWindow?
 
     func activate() { registerHotKey() }
 
@@ -36,17 +65,18 @@ final class RecorderTool: ToolModule {
         hotKeyRegistered = hotKeyID != nil
     }
 
-    /// 按一次开始选、控制条出来时再按 = 开始录、录制中按 = 停止
+    /// ⌘4：空闲时选区域；控制条出来后 = 开始；等定时开始时 = 现在就开始；录制中或暂停中 = 停止
     func hotKeyPressed() {
         switch state {
         case .idle: choose()
-        case .ready(let target): begin(target)
-        case .recording: stop()
-        case .choosing, .countingDown, .stopping: break
+        case .ready(let target): startFromBar(target)
+        case .scheduled(let target, _): beginCountdown(target)
+        case .recording, .paused: stop()
+        case .choosing, .countingDown, .pausing, .stopping: break
         }
     }
 
-    // MARK: 选区域
+    // MARK: 选区域、控制条
 
     func choose(delay: Double = 0) {
         guard state == .idle, SelectionSession.active == nil else { return }
@@ -74,38 +104,89 @@ final class RecorderTool: ToolModule {
         }
     }
 
-    private func showControlBar(for target: RecordTarget) {
+    /// 选好区域后出控制条（自检也直接调它）
+    func showControlBar(for target: RecordTarget, present: Bool = true) {
         state = .ready(target)
-        if case .region = target {
-            let b = RecordingBorderWindow(region: target.globalFrame)
+        let bar = RecordingControlBar(systemAudio: Settings.recordSystemAudio, microphone: Settings.recordMicrophone)
+        bar.onStart = { [weak self] in self?.startFromBar(target) }
+        bar.onCancel = { [weak self] in self?.reset() }
+        controlBar = bar
+        if present, case .region(_, let screenFrame, _) = target {
+            // 开录之前红框能调大小、挪位置，控制条跟着走
+            let b = RecordingBorderWindow(region: target.globalFrame, screenFrame: screenFrame, adjustable: true)
+            b.onChange = { [weak self, weak bar] region in
+                bar?.move(near: region, on: Self.screen(containing: region))
+                _ = self
+            }
             b.show()
             border = b
         }
-        let bar = RecordingControlBar(systemAudio: Settings.recordSystemAudio, microphone: Settings.recordMicrophone)
-        bar.onStart = { [weak self] in self?.begin(target) }
-        bar.onCancel = { [weak self] in self?.reset() }
-        bar.show(near: target.globalFrame, on: Self.screen(containing: target.globalFrame))
-        controlBar = bar
+        if present { bar.show(near: target.globalFrame, on: Self.screen(containing: target.globalFrame)) }
         Log.capture.notice("record: target chosen \(target.title, privacy: .public)")
     }
 
-    // MARK: 录
+    /// 用户调过红框：按调好的框录
+    static func adjusted(_ target: RecordTarget, to region: CGRect?) -> RecordTarget {
+        guard let region, case .region(let id, let screenFrame, _) = target else { return target }
+        return .region(id: id, screenFrame: screenFrame,
+                       viewRect: region.offsetBy(dx: -screenFrame.minX, dy: -screenFrame.minY))
+    }
 
-    private func begin(_ target: RecordTarget) {
+    /// 控制条上点"开始录制"：设了几点开始就先等着，否则马上倒数。从这时起红框锁定
+    func startFromBar(_ chosen: RecordTarget, present: Bool = true) {
         guard case .ready = state else { return }
-        var options = RecordOptions(systemAudio: controlBar?.systemAudio ?? Settings.recordSystemAudio,
-                                    microphone: controlBar?.microphone ?? Settings.recordMicrophone,
-                                    quality: Settings.recordQuality)
+        let target = Self.adjusted(chosen, to: border?.region)
+        border?.setAdjustable(false)
+        if let at = controlBar?.startAt, at > Date() {
+            state = .scheduled(target, at)
+            pendingOptions = currentOptions()
+            pendingAutoStop = controlBar?.autoStopMinutes ?? 0
+            controlBar?.close()
+            if present {
+                let h = makeHUD(for: target, options: pendingOptions!)
+                h.setMode(.waiting)
+                updateWaitingText(at)
+            }
+            startTicker()
+            Log.capture.notice("record: scheduled")
+        } else {
+            beginCountdown(target)
+        }
+    }
+
+    private var pendingOptions: RecordOptions?
+    private var pendingAutoStop = 0
+    /// 暂停的那一段还在收尾时就点了"继续"：收尾完自动接着录
+    private var resumeWhenPaused = false
+
+    private func currentOptions() -> RecordOptions {
+        RecordOptions(systemAudio: controlBar?.systemAudio ?? Settings.recordSystemAudio,
+                      microphone: controlBar?.microphone ?? Settings.recordMicrophone,
+                      quality: Settings.recordQuality)
+    }
+
+    // MARK: 倒数、开始
+
+    private func beginCountdown(_ target: RecordTarget) {
+        switch state {
+        case .ready, .scheduled: break
+        default: return
+        }
+        var options = pendingOptions ?? currentOptions()
+        let autoStop = pendingOptions != nil ? pendingAutoStop : (controlBar?.autoStopMinutes ?? 0)
+        pendingOptions = nil
         controlBar?.close()
         controlBar = nil
+        hud?.close()
+        hud = nil
+        ticker?.invalidate()
         state = .countingDown
         Task { @MainActor in
             if options.microphone, !(await Self.microphoneAllowed()) {
                 options.microphone = false
                 Toast.show("麦克风没有权限，这次不录你的声音。去「系统设置 → 隐私与安全性 → 麦克风」打开 MacKit", seconds: 4)
             }
-            let center = CGPoint(x: target.globalFrame.midX, y: target.globalFrame.midY)
-            let cd = CountdownWindow(center: center)
+            let cd = CountdownWindow(center: CGPoint(x: target.globalFrame.midX, y: target.globalFrame.midY))
             countdown = cd
             for n in [3, 2, 1] {
                 cd.show(n)
@@ -114,83 +195,214 @@ final class RecorderTool: ToolModule {
             }
             cd.close()
             countdown = nil
-            await self.startRecording(target, options: options)
+            let job = Job(target: target, options: options, autoStopMinutes: autoStop)
+            try? FileManager.default.createDirectory(at: job.tempDirectory, withIntermediateDirectories: true)
+            self.job = job
+            _ = self.makeHUD(for: target, options: options)
+            await self.startSegment()
         }
     }
 
-    private func startRecording(_ target: RecordTarget, options: RecordOptions) async {
-        let folder = Settings.recordFolder
+    private func makeHUD(for target: RecordTarget, options: RecordOptions) -> RecordingHUD {
+        if let hud { return hud }
+        let h = RecordingHUD(systemAudio: options.systemAudio, microphone: options.microphone)
+        h.onStop = { [weak self] in self?.stop() }
+        h.onPause = { [weak self] in self?.pause() }
+        h.onResume = { [weak self] in self?.resume() }
+        h.onStartNow = { [weak self] in
+            if case .scheduled(let t, _) = self?.state { self?.beginCountdown(t) }
+        }
+        h.onCancel = { [weak self] in self?.reset() }
+        var isFullScreen = false
+        if case .display = target { isFullScreen = true }
+        h.show(near: target.globalFrame, on: Self.screen(containing: target.globalFrame), fullScreen: isFullScreen)
+        hud = h
+        return h
+    }
+
+    /// 开始录新的一段（第一次开始、暂停后继续都走这里）
+    private func startSegment() async {
+        guard let job else { return }
+        let recorder = ScreenRecorder(url: job.nextSegmentURL)
+        recorder.onFinished = { [weak self, weak recorder] result in
+            guard let self, let recorder else { return }
+            self.segmentFinished(recorder, result)
+        }
+        job.recorder = recorder
         do {
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let url = folder.appendingPathComponent(RecordGeometry.fileName(for: Date()))
-            let r = ScreenRecorder(url: url)
-            r.onFinished = { [weak self] result in self?.finished(result) }
-            recorder = r
-            // 小条先摆好，录制时连同红框一起从画面里排除
-            let h = RecordingHUD(systemAudio: options.systemAudio, microphone: options.microphone)
-            h.onStop = { [weak self] in self?.stop() }
-            var isFullScreen = false
-            if case .display = target { isFullScreen = true }
-            h.show(near: target.globalFrame, on: Self.screen(containing: target.globalFrame), fullScreen: isFullScreen)
-            hud = h
-            try await r.start(target: target, options: options,
-                              excluding: [h.windowNumber] + (border.map { [$0.windowNumber] } ?? []))
+            // 小条和红框从画面里排除
+            let excluded = [hud?.windowNumber, border?.windowNumber].compactMap { $0 }
+            try await recorder.start(target: job.target, options: job.options, excluding: excluded)
             state = .recording
+            hud?.setMode(.recording)
             startTicker()
         } catch {
-            Log.capture.error("record: start failed \(error.localizedDescription, privacy: .public)")
-            Toast.show("录屏没能开始：\(error.localizedDescription)", seconds: 4)
-            reset()
+            Log.capture.error("record: segment start failed \(error.localizedDescription, privacy: .public)")
+            job.recorder = nil
+            if job.segments.isEmpty {
+                Toast.show("录屏没能开始：\(error.localizedDescription)", seconds: 4)
+                reset()
+            } else {
+                job.lastError = error                // 继续失败：把已经录到的存下来
+                state = .stopping
+                finalize()
+            }
         }
     }
 
-    func stop() {
-        guard state == .recording, let recorder else { return }
-        state = .stopping
-        ticker?.invalidate()
-        onIndicator?("保存中…")
-        hud?.update("保存中…")
+    // MARK: 暂停、继续、停止
+
+    func pause() {
+        guard state == .recording, let recorder = job?.recorder else { return }
+        state = .pausing
+        hud?.setMode(.paused)
+        hud?.update("已暂停 " + RecordGeometry.durationText(job?.elapsed ?? 0))
+        onIndicator?("⏸ " + RecordGeometry.durationText(job?.elapsed ?? 0))
         Task { @MainActor in await recorder.stop() }
     }
 
-    private func finished(_ result: Result<URL, Error>) {
-        let url = recorder?.url
-        let seconds = recorder?.duration ?? 0
-        reset()
-        let size = url.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? Int } ?? 0
-        guard let url, size > 0 else {
-            if case .failure(let error) = result {
-                Toast.show("录屏失败：\(error.localizedDescription)", seconds: 4)
-            } else {
-                Toast.show("录屏失败：没有生成文件", seconds: 4)
-            }
-            return
-        }
-        lastRecording = url
-        let reveal = { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-        let length = RecordGeometry.durationText(seconds)
-        switch result {
-        case .success:
-            Log.capture.notice("record: saved \(url.lastPathComponent, privacy: .public) \(size) bytes")
-            Toast.show("✓ 录屏已保存（\(length)）　点这里在访达中显示", seconds: 5, action: reveal)
-        case .failure(let error):
-            Toast.show("录制中断：\(error.localizedDescription)。已保存录到的部分　点这里在访达中显示", seconds: 6, action: reveal)
+    func resume() {
+        if state == .pausing { resumeWhenPaused = true; return }
+        guard state == .paused else { return }
+        state = .countingDown                        // 防止连点；开始成功后变回 recording
+        Task { @MainActor in await self.startSegment() }
+    }
+
+    func stop() {
+        switch state {
+        case .recording:
+            guard let recorder = job?.recorder else { return }
+            state = .stopping
+            showSaving()
+            Task { @MainActor in await recorder.stop() }
+        case .paused:
+            state = .stopping
+            showSaving()
+            finalize()
+        case .pausing:                               // 这一段收尾完就直接拼成文件
+            resumeWhenPaused = false
+            state = .stopping
+            showSaving()
+        case .ready, .scheduled, .countingDown:
+            reset()                                  // 还没开始录：等于取消
+        default:
+            break
         }
     }
 
+    private func showSaving() {
+        ticker?.invalidate()
+        onIndicator?("保存中…")
+        hud?.setMode(.saving)
+        hud?.update("保存中…")
+    }
+
+    /// 一段收尾了：记下来；暂停中 → 等继续；停止中（或者录制流自己断了）→ 拼成最终文件
+    private func segmentFinished(_ recorder: ScreenRecorder, _ result: Result<URL, Error>) {
+        guard let job, job.recorder === recorder else { return }
+        job.recorder = nil
+        job.recordedBefore += recorder.duration
+        let size = (try? FileManager.default.attributesOfItem(atPath: recorder.url.path)[.size] as? Int) ?? 0
+        if size > 0 { job.segments.append(recorder.url) }
+        if case .failure(let error) = result { job.lastError = error }
+        switch state {
+        case .pausing:
+            state = .paused
+            ticker?.invalidate()
+            if resumeWhenPaused {
+                resumeWhenPaused = false
+                resume()
+            }
+        case .recording:                                 // 录着录着断了（窗口关了、磁盘满了）
+            state = .stopping
+            showSaving()
+            finalize()
+        default:
+            finalize()
+        }
+    }
+
+    /// 几段 → 一个 mp4，放进保存位置
+    private func finalize() {
+        guard let job else { reset(); return }
+        let seconds = job.recordedBefore
+        let error = job.lastError
+        let parts = job.segments
+        Task { @MainActor in
+            let folder = Settings.recordFolder
+            let output = folder.appendingPathComponent(RecordGeometry.fileName(for: Date()))
+            do {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                if parts.count == 1 {
+                    try FileManager.default.moveItem(at: parts[0], to: output)
+                } else {
+                    try await VideoTools.concatenate(parts, to: output)
+                }
+                try? FileManager.default.removeItem(at: job.tempDirectory)
+                self.reset()
+                self.done(output, seconds: seconds, partCount: parts.count, error: error)
+            } catch {
+                Log.capture.error("record: finalize failed \(error.localizedDescription, privacy: .public)")
+                self.reset()
+                Toast.show(parts.isEmpty ? "录屏失败：没有录到内容" : "录屏保存失败：\(error.localizedDescription)", seconds: 5)
+            }
+        }
+    }
+
+    private func done(_ url: URL, seconds: TimeInterval, partCount: Int, error: Error?) {
+        lastRecording = url
+        Log.capture.notice("record: saved \(url.lastPathComponent, privacy: .public), \(partCount) part(s)")
+        if Settings.recordOpenPreview {
+            openPreview(url)
+            return
+        }
+        let reason = error.map { "录制中断（\($0.localizedDescription)），已保存录到的部分" } ?? "✓ 录屏已保存"
+        Toast.showActions("\(reason)（\(RecordGeometry.durationText(seconds))）", actions: [
+            ("预览剪辑", { [weak self] in self?.openPreview(url) }),
+            ("存成 GIF", { [weak self] in self?.makeGIF(from: url, range: nil) }),
+            ("在访达中显示", { NSWorkspace.shared.activateFileViewerSelecting([url]) }),
+        ])
+    }
+
+    // MARK: 计时
+
     private func startTicker() {
         ticker?.invalidate()
-        onIndicator?(RecordGeometry.durationText(0))
+        tick()
         let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, let r = self.recorder else { return }
-                let text = RecordGeometry.durationText(r.duration)
-                self.onIndicator?(text)
-                self.hud?.update(text)
-            }
+            MainActor.assumeIsolated { self?.tick() }
         }
         RunLoop.main.add(t, forMode: .common)
         ticker = t
+    }
+
+    private func tick() {
+        switch state {
+        case .recording:
+            guard let job else { return }
+            let text = RecordGeometry.durationText(job.elapsed)
+            onIndicator?(text)
+            hud?.update(text + (job.autoStopMinutes > 0 ? " / \(job.autoStopMinutes) 分钟" : ""))
+            if RecordSchedule.shouldAutoStop(recorded: job.elapsed, limitMinutes: job.autoStopMinutes) {
+                Log.capture.notice("record: auto stop after \(job.autoStopMinutes) min")
+                stop()
+            }
+        case .scheduled(let target, let at):
+            if Date() >= at {
+                beginCountdown(target)
+            } else {
+                updateWaitingText(at)
+            }
+        default:
+            break
+        }
+    }
+
+    private func updateWaitingText(_ at: Date) {
+        let left = RecordGeometry.durationText(at.timeIntervalSinceNow.rounded(.up))
+        let title = RecordSchedule.startTitle(at, now: Date())
+        hud?.update("\(title) · 还有 \(left)")
+        onIndicator?("⏰ " + left)
     }
 
     /// 回到什么都没在做的状态，收起所有录屏界面
@@ -205,9 +417,55 @@ final class RecorderTool: ToolModule {
         border = nil
         hud?.close()
         hud = nil
-        recorder = nil
+        if let job, job.recorder == nil, state != .stopping { try? FileManager.default.removeItem(at: job.tempDirectory) }
+        job = nil
+        pendingOptions = nil
+        resumeWhenPaused = false
         state = .idle
         onIndicator?(nil)
+    }
+
+    // MARK: 预览、GIF
+
+    func openPreview(_ url: URL) {
+        let p = RecordingPreviewWindow(url: url)
+        p.onGIF = { [weak self] u, range in self?.makeGIF(from: u, range: range) }
+        p.onClose = { [weak self] in
+            self?.preview = nil
+            if NSApp.isActive, NSApp.modalWindow == nil { NSApp.hide(nil) }
+        }
+        preview = p
+        p.show()
+    }
+
+    /// 存成 GIF：和视频放在一起、同名。超过 30 秒先问一句
+    func makeGIF(from url: URL, range: CMTimeRange?) {
+        Task { @MainActor in
+            var seconds = range?.duration.seconds ?? 0
+            if range == nil { seconds = await VideoTools.duration(of: url) }
+            if seconds > RecordSchedule.gifWarnSeconds {
+                NSApp.activate(ignoringOtherApps: true)
+                let alert = NSAlert()
+                alert.messageText = "这段有 \(Int(seconds)) 秒，转成 GIF 会很大"
+                alert.informativeText = "GIF 适合几秒的小动画。这么长的可能有几十 MB，微信也可能发不出去。\n想发短一点的，可以先「预览剪辑」剪短再转。"
+                alert.addButton(withTitle: "还是转")
+                alert.addButton(withTitle: "算了")
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+            }
+            let output = url.deletingPathExtension().appendingPathExtension("gif")
+            Toast.show("正在存成 GIF…", seconds: 120)
+            do {
+                let frames = try await VideoTools.makeGIF(from: url, range: range, to: output)
+                let size = (try? FileManager.default.attributesOfItem(atPath: output.path)[.size] as? Int) ?? 0
+                let mb = String(format: "%.1f", Double(size) / 1_048_576)
+                Log.capture.notice("record: gif \(frames) frames, \(size) bytes")
+                Toast.show("✓ GIF 已保存（\(mb) MB）　点这里在访达中显示", seconds: 5) {
+                    NSWorkspace.shared.activateFileViewerSelecting([output])
+                }
+            } catch {
+                Toast.show("GIF 没存成：\(error.localizedDescription)", seconds: 4)
+            }
+        }
     }
 
     static func microphoneAllowed() async -> Bool {
@@ -227,14 +485,26 @@ final class RecorderTool: ToolModule {
     func menuItems() -> [NSMenuItem] {
         let combo = Settings.recordHotKey
         var items: [NSMenuItem] = []
+        let elapsed = RecordGeometry.durationText(job?.elapsed ?? 0)
         switch state {
         case .recording:
-            items.append(ActionMenuItem("■ 停止录制（已录 \(RecordGeometry.durationText(recorder?.duration ?? 0))）",
-                                        key: combo.menuKey, modifiers: combo.menuModifiers) { [weak self] in self?.stop() })
+            items.append(ActionMenuItem("■ 停止录制（已录 \(elapsed)）", key: combo.menuKey, modifiers: combo.menuModifiers) {
+                [weak self] in self?.stop()
+            })
+            items.append(ActionMenuItem("⏸ 暂停") { [weak self] in self?.pause() })
+        case .paused:
+            items.append(ActionMenuItem("▶ 继续录制（已录 \(elapsed)）") { [weak self] in self?.resume() })
+            items.append(ActionMenuItem("■ 停止录制", key: combo.menuKey, modifiers: combo.menuModifiers) { [weak self] in self?.stop() })
+        case .scheduled(let target, let at):
+            items.append(.info("⏰ \(RecordSchedule.startTitle(at, now: Date()))"))
+            items.append(ActionMenuItem("现在就开始", key: combo.menuKey, modifiers: combo.menuModifiers) { [weak self] in
+                self?.beginCountdown(target)
+            })
+            items.append(ActionMenuItem("取消定时录制") { [weak self] in self?.reset() })
         case .ready, .countingDown:
             items.append(ActionMenuItem("取消这次录屏") { [weak self] in self?.reset() })
-        case .stopping:
-            items.append(.info("录屏保存中…"))
+        case .pausing, .stopping:
+            items.append(.info("录屏处理中…"))
         case .idle, .choosing:
             items.append(ActionMenuItem("录屏（框选 / 单击窗口 / 整屏）", key: hotKeyRegistered ? combo.menuKey : "",
                                         modifiers: combo.menuModifiers) { [weak self] in self?.choose(delay: 0.2) })
@@ -245,48 +515,49 @@ final class RecorderTool: ToolModule {
             items.append(.info("⚠︎ \(rival) 开着，它也用 \(combo.display)"))
         }
 
-        let qualityMenu = NSMenu()
+        let settingsMenu = NSMenu()
         for q in RecordQuality.allCases {
-            let item = ActionMenuItem(q.title) { Settings.recordQuality = q }
+            let item = ActionMenuItem("画质：\(q.title)") { Settings.recordQuality = q }
             item.state = Settings.recordQuality == q ? .on : .off
-            qualityMenu.addItem(item)
+            settingsMenu.addItem(item)
         }
-        let qualityItem = NSMenuItem(title: "录屏画质", action: nil, keyEquivalent: "")
-        qualityItem.submenu = qualityMenu
-        items.append(qualityItem)
-
-        let folderMenu = NSMenu()
-        folderMenu.addItem(.info("位置：" + (Settings.recordFolder.path as NSString).abbreviatingWithTildeInPath))
-        folderMenu.addItem(ActionMenuItem("在访达中打开") {
+        settingsMenu.addItem(.separator())
+        let openPreview = ActionMenuItem("录完自动打开预览") { Settings.recordOpenPreview.toggle() }
+        openPreview.state = Settings.recordOpenPreview ? .on : .off
+        settingsMenu.addItem(openPreview)
+        settingsMenu.addItem(.separator())
+        settingsMenu.addItem(.info("保存位置：" + (Settings.recordFolder.path as NSString).abbreviatingWithTildeInPath))
+        settingsMenu.addItem(ActionMenuItem("在访达中打开保存位置") {
             let folder = Settings.recordFolder
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             NSWorkspace.shared.open(folder)
         })
-        if let last = lastRecording {
-            folderMenu.addItem(ActionMenuItem("最近一次录屏：在访达中显示") {
-                NSWorkspace.shared.activateFileViewerSelecting([last])
-            })
-        }
-        folderMenu.addItem(ActionMenuItem("更改位置…") { Self.chooseFolder() })
+        settingsMenu.addItem(ActionMenuItem("更改保存位置…") { Self.chooseFolder() })
         if Settings.recordFolder != Settings.defaultRecordFolder {
-            folderMenu.addItem(ActionMenuItem("恢复默认（影片/MacKit）") { Settings.recordFolder = Settings.defaultRecordFolder })
+            settingsMenu.addItem(ActionMenuItem("恢复默认（影片/MacKit）") { Settings.recordFolder = Settings.defaultRecordFolder })
         }
-        let folderItem = NSMenuItem(title: "录屏保存位置", action: nil, keyEquivalent: "")
-        folderItem.submenu = folderMenu
-        items.append(folderItem)
-
-        let keyMenu = NSMenu()
+        settingsMenu.addItem(.separator())
         for (index, preset) in RecordHotKeyPresets.all.enumerated() {
-            let item = ActionMenuItem("\(preset.display)　\(preset.note)") { [weak self] in
+            let item = ActionMenuItem("快捷键 \(preset.display)　\(preset.note)") { [weak self] in
                 Settings.recordHotKeyIndex = index
                 self?.registerHotKey()
             }
             item.state = index == Settings.recordHotKeyIndex ? .on : .off
-            keyMenu.addItem(item)
+            settingsMenu.addItem(item)
         }
-        let keyItem = NSMenuItem(title: "录屏快捷键：\(combo.display)", action: nil, keyEquivalent: "")
-        keyItem.submenu = keyMenu
-        items.append(keyItem)
+        let settingsItem = NSMenuItem(title: "录屏设置", action: nil, keyEquivalent: "")
+        settingsItem.submenu = settingsMenu
+        items.append(settingsItem)
+
+        if let last = lastRecording, state == .idle {
+            let lastMenu = NSMenu()
+            lastMenu.addItem(ActionMenuItem("预览剪辑") { [weak self] in self?.openPreview(last) })
+            lastMenu.addItem(ActionMenuItem("存成 GIF") { [weak self] in self?.makeGIF(from: last, range: nil) })
+            lastMenu.addItem(ActionMenuItem("在访达中显示") { NSWorkspace.shared.activateFileViewerSelecting([last]) })
+            let lastItem = NSMenuItem(title: "最近一次录屏", action: nil, keyEquivalent: "")
+            lastItem.submenu = lastMenu
+            items.append(lastItem)
+        }
         return items
     }
 

@@ -163,5 +163,27 @@ check(RecordGeometry.hudOrigin(size: hud, target: CGRect(x: 0, y: 0, width: 1728
 check(RecordGeometry.hudOrigin(size: hud, target: CGRect(x: 10, y: 300, width: 100, height: 100), visible: vis, fullScreen: false).x == 4,
       "区域很窄靠左 → 小条不出屏幕")
 
+// 台阶 6：定时录制
+let sh = Calendar.current
+let three = sh.date(from: DateComponents(year: 2026, month: 11, day: 4, hour: 15, minute: 0))!
+let tonight = RecordSchedule.nextStart(hour: 20, minute: 0, now: three)
+check(sh.component(.day, from: tonight) == 4 && sh.component(.hour, from: tonight) == 20, "指定 20:00 开始：今天还没到 → 今天 20:00")
+let morning = RecordSchedule.nextStart(hour: 8, minute: 30, now: three)
+check(sh.component(.day, from: morning) == 5 && sh.component(.minute, from: morning) == 30, "指定 08:30 开始：今天已经过了 → 明天 08:30")
+check(RecordSchedule.startTitle(nil, now: three) == "立即开始" && RecordSchedule.startTitle(tonight, now: three) == "20:00 开始"
+      && RecordSchedule.startTitle(morning, now: three) == "明天 08:30 开始", "控制条上的开始时间文字")
+check(!RecordSchedule.shouldAutoStop(recorded: 59, limitMinutes: 1) && RecordSchedule.shouldAutoStop(recorded: 60, limitMinutes: 1)
+      && !RecordSchedule.shouldAutoStop(recorded: 99_999, limitMinutes: 0), "录多久自动停：到点才停，不限时永远不停")
+check(RecordSchedule.autoStopTitle(0) == "不限时" && RecordSchedule.autoStopTitle(5) == "5 分钟后停", "控制条上的自动停文字")
+
+// 录制框能调：鼠标在不在虚线上、改完不出屏幕
+let rr = CGRect(x: 100, y: 100, width: 400, height: 300)
+check(RecordGeometry.isNearEdge(CGPoint(x: 100, y: 250), of: rr) && RecordGeometry.isNearEdge(CGPoint(x: 96, y: 250), of: rr)
+      && RecordGeometry.isNearEdge(CGPoint(x: 300, y: 404), of: rr), "鼠标在虚线内外 6 点以内 → 算在虚线上")
+check(!RecordGeometry.isNearEdge(CGPoint(x: 300, y: 250), of: rr) && !RecordGeometry.isNearEdge(CGPoint(x: 80, y: 250), of: rr),
+      "框里面、离框远的地方不算")
+check(RecordGeometry.clampRegion(CGRect(x: -50, y: 10, width: 10, height: 10), within: CGRect(x: 0, y: 0, width: 1728, height: 1117))
+      == CGRect(x: 0, y: 10, width: 40, height: 30), "录制框最小 40×30 点、不出屏幕")
+
 print(failures == 0 ? "UNIT TESTS OK" : "UNIT TESTS FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)

@@ -209,6 +209,12 @@ enum Settings {
         set { store.set(newValue.rawValue, forKey: "record.quality") }
     }
 
+    /// 录完自动打开预览窗口（默认不开：录完直接存好，提示里能点"预览剪辑"）
+    static var recordOpenPreview: Bool {
+        get { store.bool(forKey: "record.openPreview") }
+        set { store.set(newValue, forKey: "record.openPreview") }
+    }
+
     static let defaultRecordFolder = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Movies/MacKit", isDirectory: true)
 

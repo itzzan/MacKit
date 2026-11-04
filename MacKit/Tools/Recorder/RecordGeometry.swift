@@ -78,3 +78,61 @@ enum RecordGeometry {
         return "MacKit_录屏_\(f.string(from: date)).mp4"
     }
 }
+
+extension RecordGeometry {
+    /// 鼠标是不是在录制框的虚线上（虚线内外 tolerance 点以内）
+    static func isNearEdge(_ p: CGPoint, of r: CGRect, tolerance: CGFloat = 6) -> Bool {
+        let outer = r.insetBy(dx: -tolerance, dy: -tolerance)
+        let inner = r.insetBy(dx: tolerance, dy: tolerance)
+        return outer.contains(p) && (inner.isNull || inner.isEmpty || !inner.contains(p))
+    }
+
+    /// 录制框最小多大（点）
+    static let minRegion = CGSize(width: 40, height: 30)
+
+    /// 改大小 / 挪位置后整理一下：不小于最小尺寸、不出屏幕
+    static func clampRegion(_ r: CGRect, within bounds: CGRect) -> CGRect {
+        var out = r
+        out.size.width = min(max(out.width, minRegion.width), bounds.width)
+        out.size.height = min(max(out.height, minRegion.height), bounds.height)
+        out.origin.x = min(max(out.minX, bounds.minX), bounds.maxX - out.width)
+        out.origin.y = min(max(out.minY, bounds.minY), bounds.maxY - out.height)
+        return out
+    }
+}
+
+/// 定时录制的计算（纯计算，有单元测试）
+enum RecordSchedule {
+    /// 录多久自动停（分钟），0 = 不限时
+    static let autoStopChoices = [0, 1, 5, 10, 30, 60]
+    /// 几分钟后开始
+    static let startInChoices = [1, 5, 10, 30]
+
+    static func autoStopTitle(_ minutes: Int) -> String { minutes == 0 ? "不限时" : "\(minutes) 分钟后停" }
+
+    /// 指定几点几分开始：今天这个时间已经过了就算明天
+    static func nextStart(hour: Int, minute: Int, now: Date, calendar: Calendar = .current) -> Date {
+        var c = calendar.dateComponents([.year, .month, .day], from: now)
+        c.hour = hour
+        c.minute = minute
+        c.second = 0
+        let today = calendar.date(from: c) ?? now
+        return today > now ? today : (calendar.date(byAdding: .day, value: 1, to: today) ?? today)
+    }
+
+    /// 控制条上显示的开始时间："立即开始" / "20:00 开始" / "明天 08:30 开始"
+    static func startTitle(_ date: Date?, now: Date, calendar: Calendar = .current) -> String {
+        guard let date else { return "立即开始" }
+        let c = calendar.dateComponents([.hour, .minute], from: date)
+        let hm = String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
+        return calendar.isDate(date, inSameDayAs: now) ? "\(hm) 开始" : "明天 \(hm) 开始"
+    }
+
+    static func shouldAutoStop(recorded seconds: TimeInterval, limitMinutes: Int) -> Bool {
+        limitMinutes > 0 && seconds >= Double(limitMinutes * 60)
+    }
+
+    /// GIF 太长会很大：超过 30 秒先提醒
+    static let gifWarnSeconds: Double = 30
+}
+

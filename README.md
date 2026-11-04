@@ -12,7 +12,7 @@ scripts/test.sh                 # 全部检查：坐标单元测试 + 编译 + �
 scripts/build.sh                # 只编译
 scripts/install.sh              # 编译、装到 ~/Applications 并启动
 scripts/install.sh --no-open    # 只装不启动
-scripts/smoke-record.sh         # 录屏实录检查：真的录三小段再删掉（会短暂出现系统的录屏标志）
+scripts/smoke-record.sh         # 录屏实录检查：真的录几小段、拼接、转 GIF 再删掉（会短暂出现系统的录屏标志）
 MACKIT_BUILDER=swiftc scripts/build.sh   # 装了 Xcode 也强制用命令行编译
 ```
 
@@ -37,7 +37,7 @@ MacKit/
     Pin/          贴图：贴图窗口、缩放透明度、读剪贴板、文字卡片、贴图上标注
     Annotate/     标注：八种工具、工具栏、撤销重做、马赛克、导出
     Clipboard/    剪贴板历史：盯剪贴板、跳过密码、存盘、小窗口、自动粘贴
-    Recorder/     录屏：选区域、控制条、倒计时、红框、录成 mp4
+    Recorder/     录屏：选区域、控制条、倒计时、红框、录制小条、暂停拼接、定时、预览剪辑、GIF
   Resources/      Info.plist
 Config/           签名设置（Local.xcconfig 是本机私有的）
 Tests/            坐标换算、贴图缩放、选区调整、剪贴板文字、录屏尺寸的单元测试
