@@ -50,6 +50,8 @@ enum SelfTest {
         testLongShot(menu: statusItem.menu)
         testMisc(menu: statusItem.menu, recorder: recorder)
         testTheme()
+        testMenuLayout(statusItem.menu)
+        testIconAndWindows()
 
         print(failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED (\(failures))")
         exit(failures == 0 ? 0 : 1)
@@ -766,8 +768,11 @@ enum SelfTest {
         check(Bundle.main.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") != nil,
               "App 里写明了麦克风用途（没写的话一要麦克风权限就会闪退）")
         let titles = tool.menuItems().map(\.title)
-        check(titles.contains { $0.hasPrefix("录屏（") } && titles.contains("录屏设置"),
-              "菜单里有录屏和录屏设置（画质、保存位置、快捷键、录完自动打开预览）")
+        let settingTitles = tool.settingsItems().map(\.title)
+        check(titles.contains { $0.hasPrefix("录屏（") } && settingTitles.contains { $0.hasPrefix("画质：") }
+              && settingTitles.contains("录完自动打开预览") && settingTitles.contains("更改保存位置…")
+              && settingTitles.contains { $0.hasPrefix("快捷键 ") },
+              "菜单里有录屏，录屏设置里有画质、保存位置、快捷键、录完自动打开预览")
 
         // 选区 → 录哪里
         guard let screen = NSScreen.main else { check(false, "有屏幕"); return }
@@ -1284,9 +1289,9 @@ enum SelfTest {
     private static func testMisc(menu: NSMenu?, recorder: RecorderTool) {
         let items = menu?.items ?? []
         let titles = items.map { $0.attributedTitle?.string ?? $0.title }
-        check(titles.first?.hasPrefix("CPU") == true && titles.contains { $0.hasPrefix("内存") } && titles.contains { $0.hasPrefix("网速") }
-              && titles.contains { $0.hasPrefix("磁盘") } && titles.contains("打开活动监视器（看是哪个软件在占）"),
-              "菜单最上面是系统状态：CPU、内存、网速、磁盘，还能打开活动监视器")
+        check(titles.first == "系统状态（点一下打开活动监视器）" && titles.count > 3 && titles[1].hasPrefix("CPU") && titles[1].contains("内存")
+              && titles[2].hasPrefix("网速") && titles[3].hasPrefix("磁盘"),
+              "菜单最上面是系统状态：CPU 和内存、网速、磁盘（点一下打开活动监视器）")
         check(titles.contains("延时截图") && titles.contains("防休眠：关") && titles.contains("排窗口（系统自带的快捷键）"),
               "菜单里有延时截图、防休眠、排窗口小抄")
         let delaySub = items.first { $0.title == "延时截图" }?.submenu?.items.map(\.title) ?? []
@@ -1311,8 +1316,8 @@ enum SelfTest {
         let lines = status.lines
         check(status.cpu.map { (0...1).contains($0) } == true && (status.down ?? -1) >= 0 && (status.up ?? -1) >= 0,
               "隔一会儿再取一次 → 算出 CPU 使用率和网速")
-        check(lines.count >= 4 && lines[0].hasSuffix("%") && lines[1].contains("已用") && lines[2].contains("↓")
-              && lines[3].contains("剩余"), "系统状态每一行都有数：\(lines.joined(separator: " | "))")
+        check(lines.count == 3 && lines[0].contains("%") && lines[0].contains("已用") && lines[1].contains("↓")
+              && lines[2].contains("剩余"), "系统状态三行都有数：\(lines.joined(separator: " | "))")
 
         // 防休眠（只走逻辑，不真的去挡系统休眠）
         let awake = KeepAwakeTool()
@@ -1359,6 +1364,66 @@ enum SelfTest {
     }
 
     // MARK: 台阶 10 统一样子
+
+    /// 菜单里所有的字（连子菜单）
+    private static func allTitles(_ menu: NSMenu) -> [String] {
+        menu.items.flatMap { item -> [String] in
+            [item.attributedTitle?.string ?? item.title] + (item.submenu.map(allTitles) ?? [])
+        }
+    }
+
+    private static func testMenuLayout(_ menu: NSMenu?) {
+        guard let menu else { check(false, "菜单存在"); return }
+        let headers = menu.items.filter(\.isSectionHeader).map(\.title)
+        check(headers == ["系统状态（点一下打开活动监视器）", "截图", "录屏", "剪贴板", "识别", "小工具"],
+              "菜单分组有小标题：\(headers.joined(separator: "、"))")
+        let rows = menu.items.filter { !$0.isSeparatorItem }
+        check(rows.count <= 30, "菜单第一层 \(rows.count) 行（整理前 40 多行）")
+        func sub(_ title: String) -> [String] { menu.items.first { $0.title == title }?.submenu.map(allTitles) ?? [] }
+        let shot = sub("截图设置")
+        check(shot.contains { $0.hasPrefix("截图快捷键") } && shot.contains("截图保存位置") && shot.contains { $0.hasPrefix("贴图快捷键") }
+              && shot.contains { $0.hasPrefix("快速模式") } && shot.contains { $0.hasPrefix("截图时按 C") }, "截图设置里有截图、贴图的快捷键和保存位置")
+        check(sub("录屏设置").contains { $0.hasPrefix("画质") } && sub("剪贴板设置").contains { $0.hasPrefix("剪贴板快捷键") }
+              && sub("剪贴板设置").contains("暂停记录") && sub("识别设置").contains { $0.hasPrefix("识别文字快捷键") }
+              && sub("识别设置").contains { $0.hasPrefix("测量快捷键") }, "录屏、剪贴板、识别的设置都收进各自的\u{201C}设置\u{201D}子菜单")
+        let everything = allTitles(menu)
+        let mustHave = ["截取整个屏幕", "长截图（框选后往下滚，拼成一张长图）", "延时截图", "3 秒后截图", "贴图（剪贴板里的图片或文字）",
+                        "录屏（框选 / 单击窗口 / 整屏）", "识别文字（框选）", "测量（自动量宽高、拖框量大小）", "排窗口（系统自带的快捷键）",
+                        "30 分钟", "截图保存位置", "录完自动打开预览", "关于 MacKit", "退出 MacKit"]
+        let missing = mustHave.filter { !everything.contains($0) }
+        check(missing.isEmpty && everything.contains { $0.hasPrefix("剪贴板历史（") } && everything.contains { $0.hasPrefix("MacKit ") }
+              && everything.contains { $0.hasPrefix("屏幕录制权限") },
+              "整理后每个功能都还在\(missing.isEmpty ? "" : "（少了：\(missing.joined(separator: "、"))）")")
+    }
+
+    private static func testIconAndWindows() {
+        check(Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") as? String == "AppIcon"
+              && Bundle.main.url(forResource: "AppIcon", withExtension: "icns") != nil, "App 里有图标（AppIcon.icns）")
+        if let icon = IconMaker.draw(size: 128) {
+            let corner = pixelAlpha(icon, x: 2, y: 2), edge = pixel(icon, x: 20, y: 64)
+            var blue = 0
+            if let px = PixelBuffer(image: icon) {
+                for y in 30..<98 { for x in 30..<98 { let c = px.rgb(x, y); if c.2 > c.0 + 80 && c.2 > 180 { blue += 1 } } }
+            }
+            check(icon.width == 128 && corner == 0 && blue > 400 && edge.r < 80 && edge.g < 80,
+                  "图标：四角透明、中间是蓝色的扳手和螺丝刀（\(blue) 个蓝点）、底是深色")
+        } else {
+            check(false, "图标画得出来")
+        }
+        let row = ClipboardSelectionRowView()
+        check(row.isEmphasized, "剪贴板小窗口：选中行按强调样式画（主题色底、白字）")
+    }
+
+    /// 读一个像素的透明度，y 从上往下数
+    private static func pixelAlpha(_ image: CGImage, x: Int, y: Int) -> Int {
+        var bytes = [UInt8](repeating: 0, count: 4)
+        bytes.withUnsafeMutableBytes { buffer in
+            guard let ctx = CGContext(data: buffer.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: sRGB,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+            ctx.draw(image, in: CGRect(x: -x, y: -(image.height - 1 - y), width: image.width, height: image.height))
+        }
+        return Int(bytes[3])
+    }
 
     private static func testTheme() {
         // 按钮：几种样子的底色

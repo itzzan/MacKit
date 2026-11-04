@@ -44,6 +44,7 @@ build_with_swiftc() {
     -o "$APP/Contents/MacOS/MacKit" \
     "${sources[@]}"
   cp "$ROOT/MacKit/Resources/Info.plist" "$APP/Contents/Info.plist"
+  cp "$ROOT/MacKit/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
   # 调试符号放到包外面（崩溃时用来看是哪一行）
   rm -rf "$ROOT/build/MacKit.dSYM"
   if [ -d "$APP/Contents/MacOS/MacKit.dSYM" ]; then mv "$APP/Contents/MacOS/MacKit.dSYM" "$ROOT/build/"; fi

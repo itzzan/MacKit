@@ -174,6 +174,12 @@ final class ScreenshotTool: ToolModule {
         let delayItem = NSMenuItem(title: "延时截图", action: nil, keyEquivalent: "")
         delayItem.submenu = delayMenu
         items.append(delayItem)
+        return items
+    }
+
+    func settingsItems() -> [NSMenuItem] {
+        let combo = Settings.screenshotHotKey
+        var items: [NSMenuItem] = []
         let colorMenu = NSMenu()
         let hex = ActionMenuItem("HEX，比如 #FF3B30") { Settings.colorAsHex = true }
         hex.state = Settings.colorAsHex ? .on : .off

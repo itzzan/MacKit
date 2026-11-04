@@ -110,20 +110,29 @@ final class ClipboardTool: ToolModule {
         if !hotKeyRegistered {
             items.append(.info("⚠︎ 快捷键 \(combo.display) 没注册上，可能被别的软件占用，换一个试试"))
         }
+        // 暂停着、自动粘贴没开：第一层也提醒一下
+        if Settings.clipboardPaused {
+            items.append(ActionMenuItem("⏸ 暂停记录中（点这里恢复）") { Settings.clipboardPaused = false })
+        }
+        if !ClipboardPaster.canAutoPaste {
+            items.append(ActionMenuItem("自动粘贴：未开启（点这里去开「辅助功能」权限）") {
+                ClipboardPaster.requestAccessibility()
+                ClipboardPaster.openAccessibilitySettings()
+            })
+        }
+        return items
+    }
+
+    func settingsItems() -> [NSMenuItem] {
+        let combo = Settings.clipboardHotKey
+        var items: [NSMenuItem] = []
         let pause = ActionMenuItem("暂停记录") { Settings.clipboardPaused.toggle() }
         pause.state = Settings.clipboardPaused ? .on : .off
         items.append(pause)
         if store.unpinnedCount > 0 {
             items.append(ActionMenuItem("清空历史（保留置顶的）") { [weak self] in self?.store.clearUnpinned() })
         }
-        if ClipboardPaster.canAutoPaste {
-            items.append(.info("自动粘贴：已开启"))
-        } else {
-            items.append(ActionMenuItem("自动粘贴：未开启（点这里去开「辅助功能」权限）") {
-                ClipboardPaster.requestAccessibility()
-                ClipboardPaster.openAccessibilitySettings()
-            })
-        }
+        if ClipboardPaster.canAutoPaste { items.append(.info("自动粘贴：已开启")) }
 
         let keyMenu = NSMenu()
         for (index, preset) in ClipboardHotKeyPresets.all.enumerated() {

@@ -29,6 +29,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let windowTips = WindowTipsTool()
     private lazy var modules: [ToolModule] = [status, screenshot, longShot, pin, clipboard, recorder, ocr, measure,
                                               keepAwake, windowTips]
+    /// 菜单分组（台阶 10）：每组一个小标题，常用操作放第一层，设置收进这一组最后的"设置"子菜单
+    private struct MenuGroup {
+        let title: String
+        let modules: [ToolModule]
+        let settingsTitle: String?
+    }
+    private lazy var menuGroups: [MenuGroup] = [
+        MenuGroup(title: "系统状态（点一下打开活动监视器）", modules: [status], settingsTitle: nil),
+        MenuGroup(title: "截图", modules: [screenshot, longShot, pin], settingsTitle: "截图设置"),
+        MenuGroup(title: "录屏", modules: [recorder], settingsTitle: "录屏设置"),
+        MenuGroup(title: "剪贴板", modules: [clipboard], settingsTitle: "剪贴板设置"),
+        MenuGroup(title: "识别", modules: [ocr, measure], settingsTitle: "识别设置"),
+        MenuGroup(title: "小工具", modules: [keepAwake, windowTips], settingsTitle: nil),
+    ]
     /// 菜单栏图标：录屏中显示红点和时长（优先），防休眠时是咖啡杯，平常是扳手
     private var recordingText: String?
     private var keepAwakeOn = false
@@ -43,6 +57,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 录屏冒烟测试：不建菜单栏、不注册快捷键，录完就退出
         if let i = CommandLine.arguments.firstIndex(of: "--record-smoke"), CommandLine.arguments.indices.contains(i + 1) {
             RecordSmokeTest.run(resultPath: CommandLine.arguments[i + 1])
+            return
+        }
+        if CommandLine.arguments.contains("--make-iconset") {
+            IconMaker.run(arguments: CommandLine.arguments)
             return
         }
         if CommandLine.arguments.contains("--style-preview") {
@@ -124,16 +142,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// 每次点开菜单都重新生成，这样设置改了马上能看到
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        for module in modules {
-            let items = module.menuItems()
-            guard !items.isEmpty else { continue }
-            for item in items { menu.addItem(item) }
-            menu.addItem(.separator())
+        for group in menuGroups {
+            let actions = group.modules.flatMap { $0.menuItems() }
+            let settings = group.modules.map { $0.settingsItems() }.filter { !$0.isEmpty }
+            guard !actions.isEmpty else { continue }
+            if !menu.items.isEmpty { menu.addItem(.separator()) }
+            menu.addItem(.sectionHeader(title: group.title))
+            for item in actions { menu.addItem(item) }
+            if let title = group.settingsTitle, !settings.isEmpty {
+                let sub = NSMenu()
+                for (i, part) in settings.enumerated() {
+                    if i > 0 { sub.addItem(.separator()) }
+                    for item in part { sub.addItem(item) }
+                }
+                let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                item.submenu = sub
+                menu.addItem(item)
+            }
         }
-        menu.addItem(ScreenPermission.menuItem())
         menu.addItem(.separator())
-        menu.addItem(.info("MacKit \(AppInfo.version)"))
+        if !ScreenPermission.isGranted { menu.addItem(ScreenPermission.menuItem()) }     // 没开权限时第一层就提醒
+        let about = NSMenu()
+        about.addItem(.info("MacKit \(AppInfo.version)"))
+        about.addItem(ScreenPermission.menuItem())
+        if emergencyQuitRegistered { about.addItem(.info("卡住时按 \(EmergencyHotKey.quit.display) 紧急退出")) }
+        let aboutItem = NSMenuItem(title: "关于 MacKit", action: nil, keyEquivalent: "")
+        aboutItem.submenu = about
+        menu.addItem(aboutItem)
         menu.addItem(ActionMenuItem("退出 MacKit", key: "q", modifiers: .command) { NSApp.terminate(nil) })
-        if emergencyQuitRegistered { menu.addItem(.info("卡住时按 \(EmergencyHotKey.quit.display) 紧急退出")) }
     }
 }

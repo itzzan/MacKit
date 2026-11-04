@@ -6,6 +6,12 @@ import AppKit
 protocol ToolModule: AnyObject {
     /// 启动时调用一次：注册快捷键等
     func activate()
-    /// 每次打开菜单栏菜单时调用，返回这块积木的菜单项
+    /// 每次打开菜单栏菜单时调用，返回这块积木的常用操作（和出问题时的提醒），放在菜单第一层
     func menuItems() -> [NSMenuItem]
+    /// 不常改的设置（快捷键、保存位置……），收进这一组最后的"设置"子菜单（台阶 10）
+    func settingsItems() -> [NSMenuItem]
+}
+
+extension ToolModule {
+    func settingsItems() -> [NSMenuItem] { [] }
 }

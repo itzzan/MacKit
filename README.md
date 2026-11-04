@@ -15,6 +15,7 @@ scripts/install.sh --no-open    # 只装不启动
 scripts/smoke-record.sh         # 录屏实录检查：真的录几小段、拼接、转 GIF 再删掉（会短暂出现系统的录屏标志）
 scripts/smoke-longshot.sh       # 长截图实录检查：真的拍屏幕左上角一小块 1.5 秒，看尺寸、量拼接速度（会短暂出现系统的录屏标志）
 build/MacKit.app/Contents/MacOS/MacKit --style-preview 输出.png 标题 [左边一栏.png]   # 样张：把各个浮动条、按钮画进一张图（不弹窗口）
+scripts/make-icon.sh            # 重画 App 图标（用代码画，打包成 MacKit/Resources/AppIcon.icns）
 MACKIT_BUILDER=swiftc scripts/build.sh   # 装了 Xcode 也强制用命令行编译
 ```
 
@@ -32,7 +33,7 @@ xcodegen generate
 
 ```
 MacKit/
-  App/            程序入口、自检、样张
+  App/            程序入口、自检、样张、画 App 图标
   Core/           公共积木：快捷键、设置、权限、提示条、菜单、截图记录、统一样子（Theme）
   Tools/
     Screenshot/   截图：冻屏、选区覆盖层、坐标换算、复制和保存
@@ -43,7 +44,7 @@ MacKit/
     Recognize/    识别工具：识别文字和二维码、结果窗口、取色用的像素读取、测量
     LongShot/     长截图：边拍边拼的算法、控制条和预览条、自动滚动
     Misc/         杂项：系统状态（CPU、内存、网速、磁盘、电池）、防休眠、排窗口小抄
-  Resources/      Info.plist
+  Resources/      Info.plist、App 图标
 Config/           签名设置（Local.xcconfig 是本机私有的）
 Tests/            坐标换算、贴图缩放、选区调整、剪贴板文字、录屏尺寸、按键显示、识别和测量、长截图拼接、系统状态文字的单元测试
 scripts/          编译、测试、安装脚本

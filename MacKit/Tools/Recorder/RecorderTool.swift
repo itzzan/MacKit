@@ -577,7 +577,20 @@ final class RecorderTool: ToolModule {
         } else if let rival = combo.runningRival {
             items.append(.info("⚠︎ \(rival) 开着，它也用 \(combo.display)"))
         }
+        if let last = lastRecording, state == .idle {
+            let lastMenu = NSMenu()
+            lastMenu.addItem(ActionMenuItem("预览剪辑") { [weak self] in self?.openPreview(last) })
+            lastMenu.addItem(ActionMenuItem("存成 GIF") { [weak self] in self?.makeGIF(from: last, range: nil) })
+            lastMenu.addItem(ActionMenuItem("在访达中显示") { NSWorkspace.shared.activateFileViewerSelecting([last]) })
+            let lastItem = NSMenuItem(title: "最近一次录屏", action: nil, keyEquivalent: "")
+            lastItem.submenu = lastMenu
+            items.append(lastItem)
+        }
+        return items
+    }
 
+    /// 录屏设置：画质、录完打开预览、保存位置、快捷键（放进菜单里"录屏设置"子菜单）
+    func settingsItems() -> [NSMenuItem] {
         let settingsMenu = NSMenu()
         for q in RecordQuality.allCases {
             let item = ActionMenuItem("画质：\(q.title)") { Settings.recordQuality = q }
@@ -608,19 +621,8 @@ final class RecorderTool: ToolModule {
             item.state = index == Settings.recordHotKeyIndex ? .on : .off
             settingsMenu.addItem(item)
         }
-        let settingsItem = NSMenuItem(title: "录屏设置", action: nil, keyEquivalent: "")
-        settingsItem.submenu = settingsMenu
-        items.append(settingsItem)
-
-        if let last = lastRecording, state == .idle {
-            let lastMenu = NSMenu()
-            lastMenu.addItem(ActionMenuItem("预览剪辑") { [weak self] in self?.openPreview(last) })
-            lastMenu.addItem(ActionMenuItem("存成 GIF") { [weak self] in self?.makeGIF(from: last, range: nil) })
-            lastMenu.addItem(ActionMenuItem("在访达中显示") { NSWorkspace.shared.activateFileViewerSelecting([last]) })
-            let lastItem = NSMenuItem(title: "最近一次录屏", action: nil, keyEquivalent: "")
-            lastItem.submenu = lastMenu
-            items.append(lastItem)
-        }
+        let items = settingsMenu.items
+        settingsMenu.removeAllItems()
         return items
     }
 

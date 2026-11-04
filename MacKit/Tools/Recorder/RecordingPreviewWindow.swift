@@ -46,7 +46,7 @@ final class RecordingPreviewWindow: NSObject, NSWindowDelegate {
             views.append(b)
         }
         status.textColor = .secondaryLabelColor
-        status.font = .systemFont(ofSize: 12)
+        status.font = Theme.small()
         status.stringValue = "拖进度条看一看；要剪就点「剪掉开头结尾」"
         let bar = NSStackView(views: views + [status])
         bar.orientation = .horizontal

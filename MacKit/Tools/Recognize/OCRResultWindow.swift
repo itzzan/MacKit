@@ -23,7 +23,8 @@ final class OCRResultWindow: NSObject, NSWindowDelegate {
 
         textView.isRichText = false
         textView.allowsUndo = true
-        textView.font = .systemFont(ofSize: 14)
+        textView.font = Theme.body(.regular)
+        textView.selectedTextAttributes = [.backgroundColor: Theme.accent.withAlphaComponent(0.3)]
         textView.textContainerInset = NSSize(width: 8, height: 8)
         textView.string = result.text
         textView.isVerticallyResizable = true
@@ -57,7 +58,7 @@ final class OCRResultWindow: NSObject, NSWindowDelegate {
         buttons["copyCode"]?.isHidden = result.codes.isEmpty
         buttons["open"]?.isHidden = result.codes.first.flatMap(OCRText.url(in:)) == nil
         status.textColor = .secondaryLabelColor
-        status.font = .systemFont(ofSize: 12)
+        status.font = Theme.small()
         status.stringValue = result.lines.isEmpty ? (result.codes.isEmpty ? "这块里没认出文字" : "") : "已复制到剪贴板"
         status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let bar = NSStackView(views: views + [status])

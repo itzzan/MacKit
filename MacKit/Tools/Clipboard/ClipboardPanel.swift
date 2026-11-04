@@ -63,8 +63,10 @@ final class ClipboardPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate
         background.material = .popover
         background.state = .active
         background.wantsLayer = true
-        background.layer?.cornerRadius = 10
+        background.layer?.cornerRadius = Theme.barRadius
         background.layer?.masksToBounds = true
+        background.layer?.borderWidth = 1
+        background.layer?.borderColor = NSColor.separatorColor.cgColor
         window.contentView = background
 
         searchField.placeholderString = "搜索剪贴板历史"
@@ -96,7 +98,7 @@ final class ClipboardPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
         let footer = NSTextField(labelWithString: "回车粘贴　⇧回车纯文字　⌥1–9 快速粘贴　⌘P 置顶　⌘⌫ 删除　⌘2 贴图")
-        footer.font = .systemFont(ofSize: 11)
+        footer.font = Theme.small()
         footer.textColor = .secondaryLabelColor
         footer.translatesAutoresizingMaskIntoConstraints = false
 
@@ -172,6 +174,11 @@ final class ClipboardPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { shown.count }
+
+    /// 选中的那一行：主题色圆角底、白字（台阶 10）
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        ClipboardSelectionRowView()
+    }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let id = NSUserInterfaceItemIdentifier("row")
@@ -304,10 +311,10 @@ final class ClipboardRowView: NSTableCellView {
     init() {
         super.init(frame: .zero)
         icon.imageScaling = .scaleProportionallyUpOrDown
-        title.font = .systemFont(ofSize: 13)
+        title.font = Theme.body(.regular)
         title.lineBreakMode = .byTruncatingTail
         title.maximumNumberOfLines = 1
-        detail.font = .systemFont(ofSize: 11)
+        detail.font = Theme.small()
         detail.textColor = .secondaryLabelColor
         detail.lineBreakMode = .byTruncatingTail
         shortcut.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
@@ -355,5 +362,20 @@ final class ClipboardRowView: NSTableCellView {
         }
         detail.stringValue = parts.joined(separator: " · ")
         shortcut.stringValue = key
+    }
+}
+
+
+/// 剪贴板小窗口里选中那一行的底：主题色、圆角（不管系统设置里的强调色是什么，都和 MacKit 别处一样）
+final class ClipboardSelectionRowView: NSTableRowView {
+    override var isEmphasized: Bool {
+        get { true }                         // 一直按"强调"画，选中行的字是白的
+        set {}
+    }
+
+    override func drawSelection(in dirtyRect: NSRect) {
+        guard selectionHighlightStyle != .none else { return }
+        Theme.accent.setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 4, dy: 1), xRadius: Theme.buttonRadius, yRadius: Theme.buttonRadius).fill()
     }
 }

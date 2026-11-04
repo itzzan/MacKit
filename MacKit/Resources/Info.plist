@@ -8,6 +8,8 @@
 	<string>MacKit</string>
 	<key>CFBundleExecutable</key>
 	<string>MacKit</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>local.mackit.MacKit</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -17,17 +19,17 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.10.0</string>
+	<string>0.10.1</string>
 	<key>CFBundleVersion</key>
-	<string>12</string>
+	<string>13</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
 	<key>LSUIElement</key>
 	<true/>
-	<key>NSHighResolutionCapable</key>
-	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>录屏时在角落显示你的摄像头画面。只有你在录屏控制条里打开摄像头时才会用。</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>录屏时录下你的声音。只有你在录屏控制条里打开麦克风时才会用。</string>
 	<key>NSPrincipalClass</key>

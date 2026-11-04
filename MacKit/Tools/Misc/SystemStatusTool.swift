@@ -86,11 +86,10 @@ enum SystemStats {
 /// 不占菜单栏位置（2026-11-04 拍板：你的菜单栏图标已经排到刘海旁边了）
 @MainActor
 final class SystemStatusTool: ToolModule {
+    // 三行（台阶 10 菜单整理：CPU 和内存一行、网速一行、磁盘和电池一行）
     private var cpuItem: NSMenuItem?
-    private var memoryItem: NSMenuItem?
     private var networkItem: NSMenuItem?
     private var diskItem: NSMenuItem?
-    private var batteryItem: NSMenuItem?
     private var timer: Timer?
     private var lastSampleAt: Date?
     private var lastCPU: [UInt32]?
@@ -105,23 +104,12 @@ final class SystemStatusTool: ToolModule {
         // 上次取样太久以前（菜单关着时不取样），算出来的是很长一段时间的平均，不准：重新起头，半秒后再出数
         if let last = lastSampleAt, Date().timeIntervalSince(last) > 3 { cpu = nil; down = nil; up = nil; lastCPU = nil; lastNet = [:] }
         sample()
-        var items: [NSMenuItem] = []
-        let cpu = line(), memory = line(), network = line(), disk = line()
-        items += [cpu, memory, network, disk]
+        let cpu = line(), network = line(), disk = line()
         cpuItem = cpu
-        memoryItem = memory
         networkItem = network
         diskItem = disk
-        if SystemStats.battery() != nil {
-            let battery = line()
-            items.append(battery)
-            batteryItem = battery
-        } else {
-            batteryItem = nil
-        }
-        items.append(ActionMenuItem("打开活动监视器（看是哪个软件在占）") { Self.openActivityMonitor() })
         refreshTitles()
-        return items
+        return [cpu, network, disk]
     }
 
     /// 菜单打开、关上（AppDelegate 告诉我们）：开着时每秒刷新，关着就停，不白费电
@@ -175,17 +163,18 @@ final class SystemStatusTool: ToolModule {
     }
 
     var lines: [String] {
-        [cpuItem, memoryItem, networkItem, diskItem, batteryItem].compactMap { $0?.attributedTitle?.string }
+        [cpuItem, networkItem, diskItem].compactMap { $0?.attributedTitle?.string }
     }
 
     private func refreshTitles() {
-        set(cpuItem, SystemText.cpuLine(cpu))
-        if let used = SystemStats.memoryUsed() { set(memoryItem, SystemText.memoryLine(used: used, total: SystemStats.memoryTotal)) }
+        let memory = SystemStats.memoryUsed().map { SystemText.memoryLine(used: $0, total: SystemStats.memoryTotal) } ?? "内存　…"
+        set(cpuItem, SystemText.cpuLine(cpu) + "　　" + memory)
         set(networkItem, SystemText.networkLine(down: down, up: up))
-        if let free = SystemStats.diskAvailable() { set(diskItem, SystemText.diskLine(available: free)) }
+        var disk = SystemStats.diskAvailable().map { SystemText.diskLine(available: $0) } ?? "磁盘　…"
         if let b = SystemStats.battery() {
-            set(batteryItem, SystemText.batteryLine(percent: b.percent, charging: b.charging, charged: b.charged, onPower: b.onPower))
+            disk += "　　" + SystemText.batteryLine(percent: b.percent, charging: b.charging, charged: b.charged, onPower: b.onPower)
         }
+        set(diskItem, disk)
     }
 
     private func line() -> NSMenuItem {

@@ -143,18 +143,27 @@ final class PinTool: ToolModule {
         }
 
         if !pins.isEmpty {
-            items.append(.info("贴图：\(pins.count) 张\(hidden ? "（已隐藏）" : "")"))
-            items.append(ActionMenuItem(hidden ? "全部显示" : "全部隐藏",
-                                        key: hotKeysRegistered ? keys.toggle.menuKey : "",
-                                        modifiers: keys.toggle.menuModifiers) { [weak self] in
+            // 已经贴了几张：管理的操作收进一个子菜单，免得菜单变长
+            let manage = NSMenu()
+            manage.addItem(ActionMenuItem(hidden ? "全部显示" : "全部隐藏",
+                                          key: hotKeysRegistered ? keys.toggle.menuKey : "",
+                                          modifiers: keys.toggle.menuModifiers) { [weak self] in
                 self?.toggleAll()
             })
             if pins.contains(where: { $0.isClickThrough }) {
-                items.append(ActionMenuItem("取消所有穿透") { [weak self] in self?.releaseClickThrough() })
+                manage.addItem(ActionMenuItem("取消所有穿透") { [weak self] in self?.releaseClickThrough() })
             }
-            items.append(ActionMenuItem("关闭全部贴图") { [weak self] in self?.closeAll() })
+            manage.addItem(ActionMenuItem("关闭全部贴图") { [weak self] in self?.closeAll() })
+            let manageItem = NSMenuItem(title: "已贴 \(pins.count) 张\(hidden ? "（已隐藏）" : "")", action: nil, keyEquivalent: "")
+            manageItem.submenu = manage
+            items.append(manageItem)
         }
+        return items
+    }
 
+    func settingsItems() -> [NSMenuItem] {
+        let keys = Settings.pinHotKeys
+        var items: [NSMenuItem] = []
         let keyMenu = NSMenu()
         for (index, preset) in PinHotKeyPresets.all.enumerated() {
             let item = ActionMenuItem("\(preset.pin.display) 贴图，\(preset.toggle.display) 隐藏/显示　\(preset.pin.note)") { [weak self] in

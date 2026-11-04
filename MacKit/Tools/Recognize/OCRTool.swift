@@ -83,6 +83,12 @@ final class OCRTool: ToolModule {
         if !hotKeyRegistered {
             items.append(.info("⚠︎ 快捷键 \(combo.display) 没注册上，可能被别的软件占用，换一个试试"))
         }
+        return items
+    }
+
+    func settingsItems() -> [NSMenuItem] {
+        let combo = RecognizeHotKeyPresets.ocr[Settings.ocrHotKeyIndex]
+        var items: [NSMenuItem] = []
         let keyMenu = NSMenu()
         for (index, preset) in RecognizeHotKeyPresets.ocr.enumerated() {
             let item = ActionMenuItem("\(preset.display)　\(preset.note)") { [weak self] in
