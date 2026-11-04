@@ -101,6 +101,30 @@ extension RecordGeometry {
     }
 }
 
+extension RecordGeometry {
+    /// 按键牌子放哪：录制区域下方正中、往里一点；录整屏时在屏幕下方正中
+    static func keyCastOrigin(size: CGSize, target: CGRect, visible: CGRect, fullScreen: Bool) -> CGPoint {
+        let area = fullScreen ? visible : target
+        var x = (area.midX - size.width / 2).rounded()
+        var y = area.minY + (fullScreen ? 60 : 24)
+        x = min(max(x, visible.minX + 4), visible.maxX - size.width - 4)
+        y = min(max(y, visible.minY + 4), visible.maxY - size.height - 4)
+        return CGPoint(x: x, y: y)
+    }
+
+    /// 摄像头画面一开始放哪：录制区域右下角、往里 16 点；不出屏幕
+    static func cameraFrame(side: CGFloat, target: CGRect, visible: CGRect) -> CGRect {
+        var x = target.maxX - side - 16
+        var y = target.minY + 16
+        x = min(max(x, visible.minX + 4), visible.maxX - side - 4)
+        y = min(max(y, visible.minY + 4), visible.maxY - side - 4)
+        return CGRect(x: x, y: y, width: side, height: side)
+    }
+
+    /// 摄像头画面大小：滚轮调，最小 80、最大 400 点
+    static func clampCameraSide(_ side: CGFloat) -> CGFloat { min(max(side, 80), 400) }
+}
+
 /// 定时录制的计算（纯计算，有单元测试）
 enum RecordSchedule {
     /// 录多久自动停（分钟），0 = 不限时

@@ -1,12 +1,25 @@
 import AppKit
 
-/// 录制前的小控制条：🔊 系统声音、🎙 麦克风、⏱ 录多久自动停、⏰ 几点开始、● 开始录制、✕ 不录了
+/// 录制前的小控制条：🔊 系统声音、🎙 麦克风、🖱 点击、⌨ 按键、📷 摄像头、⏱ 录多久自动停、⏰ 几点开始、● 开始录制、✕ 不录了
 @MainActor
 final class RecordingControlBar {
     var onStart: (() -> Void)?
     var onCancel: (() -> Void)?
+    /// 📷 开关变了（RecorderTool 打开 / 关掉摄像头画面）
+    var onCameraChange: ((Bool) -> Void)?
     private(set) var systemAudio: Bool
     private(set) var microphone: Bool
+    private(set) var showClicks: Bool
+    private(set) var showKeys: Bool
+    private(set) var camera: Bool
+    /// 录的是单个窗口：按键牌子和摄像头录不进去，开了要提示
+    let windowTarget: Bool
+    private var clicksButton: ToolbarButton!
+    private var keysButton: ToolbarButton!
+    private var cameraButton: ToolbarButton!
+    private let hint = NSTextField(labelWithString: "录窗口时按键和摄像头录不进去，想要的话改成框选区域")
+    private var stack: NSStackView!
+    private var lastAnchor: (CGRect, NSScreen?)?
     /// 录多久自动停（分钟），0 = 不限时
     private(set) var autoStopMinutes = 0
     /// 几点开始，nil = 立即开始
@@ -19,9 +32,14 @@ final class RecordingControlBar {
     private(set) var buttons: [ToolbarButton] = []
     private var picker: TimePickerPanel?
 
-    init(systemAudio: Bool, microphone: Bool) {
+    init(systemAudio: Bool, microphone: Bool, showClicks: Bool = false, showKeys: Bool = false, camera: Bool = false,
+         windowTarget: Bool = false) {
         self.systemAudio = systemAudio
         self.microphone = microphone
+        self.showClicks = showClicks
+        self.showKeys = showKeys
+        self.camera = camera
+        self.windowTarget = windowTarget
         panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -36,6 +54,9 @@ final class RecordingControlBar {
 
         audioButton = ToolbarButton(symbol: "speaker.wave.2", tip: "") { [weak self] in self?.toggleAudio() }
         micButton = ToolbarButton(symbol: "mic.slash", tip: "") { [weak self] in self?.toggleMic() }
+        clicksButton = ToolbarButton(symbol: "cursorarrow.click.2", tip: "") { [weak self] in self?.toggleClicks() }
+        keysButton = ToolbarButton(symbol: "keyboard", tip: "") { [weak self] in self?.toggleKeys() }
+        cameraButton = ToolbarButton(symbol: "video.slash", tip: "") { [weak self] in self?.toggleCamera() }
         stopTimerButton = ToolbarButton(symbol: "timer", title: "不限时", tip: "录多久自动停", width: 112) { [weak self] in
             self?.showStopTimerMenu()
         }
@@ -47,16 +68,25 @@ final class RecordingControlBar {
         }
         start.contentTintColor = .systemRed
         let cancel = ToolbarButton(symbol: "xmark", tip: "不录了") { [weak self] in self?.onCancel?() }
-        buttons = [audioButton, micButton, stopTimerButton, startTimeButton, start, cancel]
+        buttons = [audioButton, micButton, clicksButton, keysButton, cameraButton, stopTimerButton, startTimeButton, start, cancel]
 
         let row = NSStackView(views: buttons)
         row.orientation = .horizontal
         row.spacing = 4
-        row.edgeInsets = NSEdgeInsets(top: 5, left: 8, bottom: 5, right: 8)
-        panel.contentView = Self.hudBackground(containing: row, cornerRadius: 9)
-        panel.setContentSize(row.fittingSize)
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = NSColor.systemYellow
+        stack = NSStackView(views: [row, hint])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 2
+        stack.detachesHiddenViews = true
+        stack.edgeInsets = NSEdgeInsets(top: 5, left: 8, bottom: 5, right: 8)
+        panel.contentView = Self.hudBackground(containing: stack, cornerRadius: 9)
         refresh()
     }
+
+    /// 录窗口时开了按键或摄像头：提示录不进去
+    var showsWindowHint: Bool { !hint.isHidden }
 
     static func hudBackground(containing row: NSView, cornerRadius: CGFloat) -> NSView {
         let background = NSVisualEffectView()
@@ -80,6 +110,16 @@ final class RecordingControlBar {
 
     private func toggleAudio() { systemAudio.toggle(); Settings.recordSystemAudio = systemAudio; refresh() }
     private func toggleMic() { microphone.toggle(); Settings.recordMicrophone = microphone; refresh() }
+    private func toggleClicks() { showClicks.toggle(); Settings.recordShowClicks = showClicks; refresh() }
+    private func toggleKeys() { showKeys.toggle(); Settings.recordShowKeys = showKeys; refresh() }
+    private func toggleCamera() { setCamera(!camera, remember: true); onCameraChange?(camera) }
+
+    /// 摄像头没权限时 RecorderTool 会把开关拨回来
+    func setCamera(_ on: Bool, remember: Bool = false) {
+        camera = on
+        if remember { Settings.recordCamera = on }
+        refresh()
+    }
 
     func setAutoStop(minutes: Int) { autoStopMinutes = minutes; refresh() }
     func setStart(at date: Date?) { startAt = date; refresh() }
@@ -95,6 +135,16 @@ final class RecordingControlBar {
         stopTimerButton.isSelectedLook = autoStopMinutes > 0
         startTimeButton.setTitle(RecordSchedule.startTitle(startAt, now: Date()))
         startTimeButton.isSelectedLook = startAt != nil
+        clicksButton.isSelectedLook = showClicks
+        clicksButton.toolTip = showClicks ? "显示鼠标点击：开" : "显示鼠标点击：关"
+        keysButton.isSelectedLook = showKeys
+        keysButton.toolTip = showKeys ? "显示按了什么键：开（只显示快捷键和功能键）" : "显示按了什么键：关"
+        cameraButton.setSymbol(camera ? "video.fill" : "video.slash", tip: camera ? "摄像头：开" : "摄像头：关")
+        cameraButton.isSelectedLook = camera
+        hint.isHidden = !(windowTarget && (showKeys || camera))
+        stack?.layoutSubtreeIfNeeded()
+        if let stack { panel.setContentSize(stack.fittingSize) }
+        if let (frame, screen) = lastAnchor { move(near: frame, on: screen) }
     }
 
     private func showStopTimerMenu() {
@@ -142,6 +192,7 @@ final class RecordingControlBar {
 
     /// 录制框改了大小 / 挪了位置：控制条跟着走
     func move(near frame: CGRect, on screen: NSScreen?) {
+        lastAnchor = (frame, screen)
         let visible = (screen ?? NSScreen.main)?.visibleFrame ?? frame
         let size = panel.frame.size
         panel.setFrameOrigin(EditGeometry.toolbarOrigin(size: size, selection: frame.insetBy(dx: -RecordingBorderWindow.margin,

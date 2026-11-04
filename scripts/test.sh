@@ -10,6 +10,7 @@ xcrun swiftc -swift-version 5 -target arm64-apple-macos15.0 -sdk "$(xcrun --show
   -o "$OUT/GeometryTests" "$ROOT/MacKit/Tools/Screenshot/Geometry.swift" \
   "$ROOT/MacKit/Tools/Pin/PinGeometry.swift" "$ROOT/MacKit/Tools/Annotate/EditGeometry.swift" \
   "$ROOT/MacKit/Tools/Clipboard/ClipboardText.swift" "$ROOT/MacKit/Tools/Recorder/RecordGeometry.swift" \
+  "$ROOT/MacKit/Tools/Recorder/KeyFormatter.swift" \
   "$ROOT/Tests/main.swift"
 "$OUT/GeometryTests"
 

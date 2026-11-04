@@ -56,6 +56,9 @@ final class RecorderTool: ToolModule {
     private var ticker: Timer?
     private(set) var lastRecording: URL?
     private var preview: RecordingPreviewWindow?
+    /// 第二批：摄像头画中画、按键牌子
+    private(set) var camera: CameraBubble?
+    private var keyCaster: KeyCaster?
 
     func activate() { registerHotKey() }
 
@@ -107,10 +110,18 @@ final class RecorderTool: ToolModule {
     /// 选好区域后出控制条（自检也直接调它）
     func showControlBar(for target: RecordTarget, present: Bool = true) {
         state = .ready(target)
-        let bar = RecordingControlBar(systemAudio: Settings.recordSystemAudio, microphone: Settings.recordMicrophone)
+        var isWindow = false
+        if case .window = target { isWindow = true }
+        let bar = RecordingControlBar(systemAudio: Settings.recordSystemAudio, microphone: Settings.recordMicrophone,
+                                      showClicks: Settings.recordShowClicks, showKeys: Settings.recordShowKeys,
+                                      camera: Settings.recordCamera, windowTarget: isWindow)
         bar.onStart = { [weak self] in self?.startFromBar(target) }
         bar.onCancel = { [weak self] in self?.reset() }
+        bar.onCameraChange = { [weak self] on in
+            if on { self?.showCamera(for: target) } else { self?.hideCamera() }
+        }
         controlBar = bar
+        if present, Settings.recordCamera { showCamera(for: target) }    // 上次开着：录之前就出来，好摆位置
         if present, case .region(_, let screenFrame, _) = target {
             // 开录之前红框能调大小、挪位置，控制条跟着走
             let b = RecordingBorderWindow(region: target.globalFrame, screenFrame: screenFrame, adjustable: true)
@@ -162,7 +173,35 @@ final class RecorderTool: ToolModule {
     private func currentOptions() -> RecordOptions {
         RecordOptions(systemAudio: controlBar?.systemAudio ?? Settings.recordSystemAudio,
                       microphone: controlBar?.microphone ?? Settings.recordMicrophone,
-                      quality: Settings.recordQuality)
+                      quality: Settings.recordQuality,
+                      showClicks: controlBar?.showClicks ?? Settings.recordShowClicks,
+                      showKeys: controlBar?.showKeys ?? Settings.recordShowKeys)
+    }
+
+    // MARK: 摄像头、按键
+
+    private func showCamera(for target: RecordTarget) {
+        guard camera == nil else { return }
+        let visible = Self.screen(containing: target.globalFrame)?.visibleFrame ?? target.globalFrame
+        let bubble = CameraBubble(side: RecordGeometry.clampCameraSide(Settings.cameraSide), rounded: Settings.cameraRounded)
+        bubble.place(RecordGeometry.cameraFrame(side: bubble.side, target: target.globalFrame, visible: visible))
+        bubble.onTurnOff = { [weak self] in
+            self?.controlBar?.setCamera(false, remember: true)
+            self?.hideCamera()
+        }
+        camera = bubble
+        Task { @MainActor in
+            if !(await bubble.start()) {
+                self.hideCamera()
+                self.controlBar?.setCamera(false, remember: true)
+                Toast.show("摄像头没有权限：去「系统设置 → 隐私与安全性 → 摄像头」打开 MacKit", seconds: 5)
+            }
+        }
+    }
+
+    private func hideCamera() {
+        camera?.close()
+        camera = nil
     }
 
     // MARK: 倒数、开始
@@ -199,6 +238,13 @@ final class RecorderTool: ToolModule {
             try? FileManager.default.createDirectory(at: job.tempDirectory, withIntermediateDirectories: true)
             self.job = job
             _ = self.makeHUD(for: target, options: options)
+            if options.showKeys {
+                let caster = KeyCaster()
+                var isFull = false
+                if case .display = target { isFull = true }
+                caster.start(target: target.globalFrame, fullScreen: isFull)
+                self.keyCaster = caster
+            }
             await self.startSegment()
         }
     }
@@ -417,6 +463,9 @@ final class RecorderTool: ToolModule {
         border = nil
         hud?.close()
         hud = nil
+        keyCaster?.stop()
+        keyCaster = nil
+        hideCamera()
         if let job, job.recorder == nil, state != .stopping { try? FileManager.default.removeItem(at: job.tempDirectory) }
         job = nil
         pendingOptions = nil

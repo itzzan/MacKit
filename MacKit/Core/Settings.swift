@@ -209,6 +209,33 @@ enum Settings {
         set { store.set(newValue.rawValue, forKey: "record.quality") }
     }
 
+    /// 控制条上的 🖱 ⌨ 📷 三个开关：记住上次的选择
+    static var recordShowClicks: Bool {
+        get { store.bool(forKey: "record.showClicks") }
+        set { store.set(newValue, forKey: "record.showClicks") }
+    }
+
+    static var recordShowKeys: Bool {
+        get { store.bool(forKey: "record.showKeys") }
+        set { store.set(newValue, forKey: "record.showKeys") }
+    }
+
+    static var recordCamera: Bool {
+        get { store.bool(forKey: "record.camera") }
+        set { store.set(newValue, forKey: "record.camera") }
+    }
+
+    /// 摄像头画面大小（点）和形状（默认圆形）
+    static var cameraSide: CGFloat {
+        get { (store.object(forKey: "record.cameraSide") as? Double).map { CGFloat($0) } ?? 180 }
+        set { store.set(Double(newValue), forKey: "record.cameraSide") }
+    }
+
+    static var cameraRounded: Bool {
+        get { store.bool(forKey: "record.cameraRounded") }
+        set { store.set(newValue, forKey: "record.cameraRounded") }
+    }
+
     /// 录完自动打开预览窗口（默认不开：录完直接存好，提示里能点"预览剪辑"）
     static var recordOpenPreview: Bool {
         get { store.bool(forKey: "record.openPreview") }

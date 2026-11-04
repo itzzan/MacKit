@@ -44,6 +44,7 @@ enum SelfTest {
         testClipboard()
         testRecorder(recorder)
         testRecordingExtras(recorder)
+        testRecordingOverlays(recorder)
 
         print(failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED (\(failures))")
         exit(failures == 0 ? 0 : 1)
@@ -823,8 +824,8 @@ enum SelfTest {
 
         // 录制前后的界面（只造不显示）
         let bar = RecordingControlBar(systemAudio: true, microphone: false)
-        check(bar.buttons.count == 6 && bar.systemAudio && !bar.microphone,
-              "控制条：系统声音、麦克风、录多久自动停、几点开始、开始、取消六个按钮")
+        check(bar.buttons.count == 9 && bar.systemAudio && !bar.microphone,
+              "控制条：系统声音、麦克风、点击、按键、摄像头、录多久自动停、几点开始、开始、取消九个按钮")
         let region2 = CGRect(x: 200, y: 200, width: 300, height: 200)
         let border = RecordingBorderWindow(region: region2, screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
                                            adjustable: false)
@@ -917,7 +918,7 @@ enum SelfTest {
         bar.setAutoStop(minutes: 5)
         let later = Date().addingTimeInterval(120)
         bar.setStart(at: later)
-        check(bar.autoStopMinutes == 5 && bar.startAt == later && bar.buttons.count == 6, "控制条：能选录 5 分钟自动停、2 分钟后开始")
+        check(bar.autoStopMinutes == 5 && bar.startAt == later && bar.buttons.count == 9, "控制条：能选录 5 分钟自动停、2 分钟后开始")
 
         // 定时流程：设了开始时间 → 等着；取消 → 回到空闲（不显示窗口、不真的录）
         let region = RecordTarget.region(id: 1, screenFrame: CGRect(x: 0, y: 0, width: 1512, height: 982),
@@ -967,6 +968,67 @@ enum SelfTest {
         check(preview.buttons.keys.sorted() == ["delete", "gif", "reveal", "save", "trim"] && preview.trimRange != nil,
               "预览窗口：剪辑、保存、存成 GIF、在访达中显示、删掉")
         preview.window.close()
+    }
+
+    // MARK: 录屏加料第二批：点击高亮、按键显示、摄像头。不打开摄像头、不监听按键、不改你的设置
+
+    private static func testRecordingOverlays(_ tool: RecorderTool) {
+        check(Bundle.main.object(forInfoDictionaryKey: "NSCameraUsageDescription") != nil, "App 里写明了摄像头用途（没写一要权限就闪退）")
+
+        let bar = RecordingControlBar(systemAudio: true, microphone: false, showClicks: true, showKeys: true, camera: false,
+                                      windowTarget: true)
+        check(bar.buttons.count == 9 && bar.showClicks && bar.showKeys && !bar.camera,
+              "控制条多了 🖱 点击、⌨ 按键、📷 摄像头三个开关（共 9 个按钮）")
+        check(bar.showsWindowHint, "录单个窗口时开了按键：控制条上提示录不进去")
+        let regionBar = RecordingControlBar(systemAudio: true, microphone: false, showClicks: true, showKeys: true, camera: true,
+                                            windowTarget: false)
+        check(!regionBar.showsWindowHint, "框选区域时不提示")
+        let plainBar = RecordingControlBar(systemAudio: true, microphone: false, windowTarget: true)
+        check(!plainBar.showsWindowHint, "录窗口但没开按键和摄像头：不提示")
+        plainBar.setCamera(true)
+        check(plainBar.camera && plainBar.showsWindowHint, "录窗口时打开摄像头：出现提示")
+
+        let plan = RecordPlan(sourceRect: nil, width: 800, height: 600, fps: 60)
+        let on = ScreenRecorder.configuration(plan: plan, options: RecordOptions(systemAudio: true, microphone: false,
+                                                                                  quality: .original60, showClicks: true))
+        let off = ScreenRecorder.configuration(plan: plan, options: RecordOptions(systemAudio: true, microphone: false,
+                                                                                   quality: .original60))
+        check(on.showMouseClicks && !off.showMouseClicks, "🖱 开着 → 录出来的视频里点击处画圈（macOS 15 自带）")
+        check(on.pixelFormat == kCVPixelFormatType_32BGRA, "画面格式是 BGRA（点击画圈要求的）")
+
+        let cast = KeyCastWindow()
+        for k in ["⌘ C", "⌘ V", "↩", "⇧ ⌘ 4"] { cast.show(k, present: false) }
+        check(cast.displayedText == "⌘ V　↩　⇧ ⌘ 4", "按键牌子：连着按的排成一行，最多 3 个")
+        let ev = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0, windowNumber: 0,
+                                  context: nil, characters: "$", charactersIgnoringModifiers: "$", isARepeat: false, keyCode: 21)!
+        check(KeyFormatter.text(keyCode: ev.keyCode, modifiers: KeyCaster.modifiers(ev.modifierFlags),
+                                characters: ev.charactersIgnoringModifiers) == "⇧ ⌘ 4", "真的按键事件 ⇧⌘4 → 牌子上是「⇧ ⌘ 4」")
+        cast.close()
+
+        // 测完原样恢复：原来没有这两项设置就删掉
+        let store = UserDefaults.standard
+        let savedSide = store.object(forKey: "record.cameraSide"), savedRounded = store.object(forKey: "record.cameraRounded")
+        defer {
+            if let savedSide { store.set(savedSide, forKey: "record.cameraSide") } else { store.removeObject(forKey: "record.cameraSide") }
+            if let savedRounded { store.set(savedRounded, forKey: "record.cameraRounded") } else { store.removeObject(forKey: "record.cameraRounded") }
+        }
+        let bubble = CameraBubble(side: 180, rounded: false)
+        check(bubble.view.layer?.cornerRadius == 90 && bubble.view.layer?.masksToBounds == true, "摄像头画面默认是圆形")
+        bubble.setRounded(true)
+        check(bubble.rounded && bubble.view.layer?.cornerRadius == 18, "右键能换成圆角方形")
+        bubble.place(CGRect(x: 500, y: 500, width: 180, height: 180))
+        bubble.setSide(260)
+        check(bubble.side == 260 && abs(bubble.panel.frame.midX - 590) < 0.5, "换成大号，中心不动")
+        bubble.setSide(1000)
+        check(bubble.side == 400, "最大 400 点")
+        let titles = bubble.makeMenu().items.map(\.title)
+        check(titles.contains { $0.hasPrefix("小") } && titles.contains("圆形") && titles.contains("圆角方形") && titles.contains("关掉摄像头"),
+              "摄像头右键菜单：大小、形状、关掉")
+        bubble.close()
+
+        tool.showControlBar(for: .window(id: 1, globalFrame: CGRect(x: 0, y: 0, width: 400, height: 300)), present: false)
+        check(tool.controlBar?.windowTarget == true, "录窗口时控制条知道是窗口")
+        tool.reset()
     }
 
     /// 造一段纯色渐变的假视频（H.264、没有声音）
@@ -1149,7 +1211,7 @@ enum RecordSmokeTest {
         recorder.onFinished = { if case .failure(let e) = $0 { failure = e } }
         do {
             try await recorder.start(target: target, options: RecordOptions(systemAudio: true, microphone: false,
-                                                                            quality: .original60), excluding: [])
+                                                                            quality: .original60, showClicks: true), excluding: [])
             try? await Task.sleep(for: .seconds(seconds))
             await recorder.stop()
         } catch {

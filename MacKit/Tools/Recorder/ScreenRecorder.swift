@@ -6,6 +6,10 @@ struct RecordOptions: Equatable {
     var systemAudio: Bool
     var microphone: Bool
     var quality: RecordQuality
+    /// 录出来的视频里每次点击画个圈（macOS 15 自带）
+    var showClicks = false
+    /// 录制时显示按了什么键（按键牌子是 MacKit 的窗口，会被录进去）
+    var showKeys = false
 }
 
 /// 算好的录制参数（自检测这个）
@@ -78,6 +82,8 @@ final class ScreenRecorder: NSObject {
         if let source = plan.sourceRect { c.sourceRect = source }
         c.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(plan.fps))
         c.showsCursor = true
+        c.pixelFormat = kCVPixelFormatType_32BGRA    // 点击画圈要求 BGRA；默认不是 BGRA，所以明确指定
+        c.showMouseClicks = options.showClicks
         c.scalesToFit = true                         // 录窗口时窗口变大变小，画面按比例缩放不变形
         c.queueDepth = 8
         c.captureResolution = .best

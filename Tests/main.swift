@@ -185,5 +185,28 @@ check(!RecordGeometry.isNearEdge(CGPoint(x: 300, y: 250), of: rr) && !RecordGeom
 check(RecordGeometry.clampRegion(CGRect(x: -50, y: 10, width: 10, height: 10), within: CGRect(x: 0, y: 0, width: 1728, height: 1117))
       == CGRect(x: 0, y: 10, width: 40, height: 30), "录制框最小 40×30 点、不出屏幕")
 
+// 台阶 6 第二批：按键显示成什么、牌子和摄像头放哪
+check(KeyFormatter.text(keyCode: 21, modifiers: [.shift, .command], characters: "$") == "⇧ ⌘ 4", "⇧⌘4 显示成「⇧ ⌘ 4」（不是 $）")
+check(KeyFormatter.text(keyCode: 8, modifiers: [.command], characters: "c") == "⌘ C", "⌘C")
+check(KeyFormatter.text(keyCode: 40, modifiers: [.control, .option, .shift, .command], characters: "k") == "⌃ ⌥ ⇧ ⌘ K",
+      "修饰键按苹果的顺序：⌃ ⌥ ⇧ ⌘")
+check(KeyFormatter.text(keyCode: 0, modifiers: [], characters: "a") == nil
+      && KeyFormatter.text(keyCode: 0, modifiers: [.shift], characters: "A") == nil
+      && KeyFormatter.text(keyCode: 49, modifiers: [], characters: " ") == nil, "普通打字（包括 ⇧ 大写、空格）不显示")
+check(KeyFormatter.text(keyCode: 0, modifiers: [], characters: "a", shortcutsOnly: false) == "A", "选「全部按键」时打字也显示")
+check(KeyFormatter.text(keyCode: 36, modifiers: [], characters: "\r") == "↩" && KeyFormatter.text(keyCode: 53, modifiers: [], characters: nil) == "⎋"
+      && KeyFormatter.text(keyCode: 123, modifiers: [], characters: nil) == "←" && KeyFormatter.text(keyCode: 96, modifiers: [], characters: nil) == "F5",
+      "功能键不带修饰键也显示：↩ ⎋ ← F5")
+check(KeyFormatter.text(keyCode: 49, modifiers: [.command], characters: " ") == "⌘ 空格", "⌘ 空格")
+let target6 = CGRect(x: 400, y: 300, width: 600, height: 400), vis6 = CGRect(x: 0, y: 0, width: 1728, height: 1084)
+check(RecordGeometry.keyCastOrigin(size: CGSize(width: 200, height: 44), target: target6, visible: vis6, fullScreen: false)
+      == CGPoint(x: 600, y: 324), "按键牌子在录制区域下方正中")
+check(RecordGeometry.keyCastOrigin(size: CGSize(width: 200, height: 44), target: target6, visible: vis6, fullScreen: true)
+      == CGPoint(x: 764, y: 60), "录整屏：按键牌子在屏幕下方正中")
+check(RecordGeometry.cameraFrame(side: 180, target: target6, visible: vis6) == CGRect(x: 804, y: 316, width: 180, height: 180),
+      "摄像头画面一开始在录制区域右下角")
+check(RecordGeometry.cameraFrame(side: 180, target: vis6, visible: vis6).maxX <= vis6.maxX - 4, "摄像头画面不出屏幕")
+check(RecordGeometry.clampCameraSide(50) == 80 && RecordGeometry.clampCameraSide(500) == 400, "摄像头画面 80 到 400 点")
+
 print(failures == 0 ? "UNIT TESTS OK" : "UNIT TESTS FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)

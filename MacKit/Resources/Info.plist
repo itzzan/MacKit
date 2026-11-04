@@ -17,15 +17,17 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.6.0</string>
+	<string>0.6.1</string>
 	<key>CFBundleVersion</key>
-	<string>7</string>
+	<string>8</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>录屏时在角落显示你的摄像头画面。只有你在录屏控制条里打开摄像头时才会用。</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>录屏时录下你的声音。只有你在录屏控制条里打开麦克风时才会用。</string>
 	<key>NSPrincipalClass</key>
