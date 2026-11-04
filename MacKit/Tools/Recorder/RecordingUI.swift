@@ -270,9 +270,10 @@ final class TimePickerPanel: NSObject, NSWindowDelegate {
 @MainActor
 final class CountdownWindow {
     let panel: NSPanel
-    private let label = NSTextField(labelWithString: "")
+    let label = NSTextField(labelWithString: "")
 
-    init(center: CGPoint) {
+    /// hint：数字下面一行小字（延时截图写"Esc 取消"）
+    init(center: CGPoint, hint: String? = nil) {
         let size = CGSize(width: 140, height: 140)
         panel = NSPanel(contentRect: CGRect(x: center.x - size.width / 2, y: center.y - size.height / 2,
                                             width: size.width, height: size.height),
@@ -293,6 +294,14 @@ final class CountdownWindow {
         label.alignment = .center
         label.frame = CGRect(x: 0, y: 24, width: size.width, height: 92)
         bg.addSubview(label)
+        if let hint {
+            let small = NSTextField(labelWithString: hint)
+            small.font = .systemFont(ofSize: 11, weight: .medium)
+            small.textColor = NSColor.white.withAlphaComponent(0.85)
+            small.alignment = .center
+            small.frame = CGRect(x: 0, y: 18, width: size.width, height: 16)
+            bg.addSubview(small)
+        }
         panel.contentView = bg
     }
 

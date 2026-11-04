@@ -24,7 +24,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let ocr = OCRTool()
     private let measure = MeasureTool()
     private let longShot = LongShotTool()
-    private lazy var modules: [ToolModule] = [screenshot, longShot, pin, clipboard, recorder, ocr, measure]
+    private let status = SystemStatusTool()
+    private let keepAwake = KeepAwakeTool()
+    private let windowTips = WindowTipsTool()
+    private lazy var modules: [ToolModule] = [status, screenshot, longShot, pin, clipboard, recorder, ocr, measure,
+                                              keepAwake, windowTips]
+    /// 菜单栏图标：录屏中显示红点和时长（优先），防休眠时是咖啡杯，平常是扳手
+    private var recordingText: String?
+    private var keepAwakeOn = false
     private(set) var emergencyQuitRegistered = false
 
     init(selfTest: Bool) {
@@ -61,6 +68,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pin.onRecognize = { [weak self] image in self?.ocr.recognize(image) }
         screenshot.onLongShot = { [weak self] region in self?.longShot.start(region) }
         longShot.onPin = { [weak self] image, size in self?.pin.pinImage(image, pointSize: size) }
+        keepAwake.dryRun = selfTest                 // 自检时录屏状态变来变去，别真的去挡系统休眠
+        recorder.onBusyChange = { [weak self] busy in self?.keepAwake.setRecording(busy) }
+        keepAwake.onChange = { [weak self] on in
+            self?.keepAwakeOn = on
+            self?.refreshStatusIcon()
+        }
         for module in modules { module.activate() }
         emergencyQuitRegistered = HotKeyCenter.shared.register(EmergencyHotKey.quit) {
             Log.app.notice("emergency quit")
@@ -75,8 +88,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// 录屏中：菜单栏图标换成红点，旁边显示时长；nil = 换回扳手
     private func showRecordingIndicator(_ text: String?) {
+        recordingText = text
+        refreshStatusIcon()
+    }
+
+    private func refreshStatusIcon() {
         guard let button = statusItem?.button else { return }
-        if let text {
+        if let text = recordingText {
             statusItem?.length = NSStatusItem.variableLength
             let config = NSImage.SymbolConfiguration(paletteColors: [.systemRed])
             button.image = NSImage(systemSymbolName: "record.circle.fill", accessibilityDescription: "正在录屏")?
@@ -86,13 +104,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             button.title = " " + text
             button.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         } else {
-            let image = NSImage(systemSymbolName: "wrench.and.screwdriver", accessibilityDescription: "MacKit")
+            let image = NSImage(systemSymbolName: keepAwakeOn ? "cup.and.saucer.fill" : "wrench.and.screwdriver",
+                                accessibilityDescription: keepAwakeOn ? "MacKit（防休眠中）" : "MacKit")
             image?.isTemplate = true
             button.image = image
             button.title = ""
+            button.toolTip = keepAwakeOn ? "MacKit 工具箱（防休眠中）" : "MacKit 工具箱"
             statusItem?.length = NSStatusItem.squareLength
         }
     }
+
+    func menuWillOpen(_ menu: NSMenu) { status.menuOpened() }
+    func menuDidClose(_ menu: NSMenu) { status.menuClosed() }
 
     /// 每次点开菜单都重新生成，这样设置改了马上能看到
     func menuNeedsUpdate(_ menu: NSMenu) {

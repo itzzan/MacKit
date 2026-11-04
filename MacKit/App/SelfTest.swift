@@ -48,6 +48,7 @@ enum SelfTest {
         testRecordingOverlays(recorder)
         testRecognize()
         testLongShot(menu: statusItem.menu)
+        testMisc(menu: statusItem.menu, recorder: recorder)
 
         print(failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED (\(failures))")
         exit(failures == 0 ? 0 : 1)
@@ -1275,6 +1276,85 @@ enum SelfTest {
             // 只写了 PNG；别的软件要 TIFF 时系统会现转，平时不占几百 MB
             check(pb.data(forType: .png) != nil && pb.types?.first == .png, "长截图：图很大时剪贴板里只写 PNG")
         }
+    }
+
+    // MARK: 台阶 9 杂项：系统状态、防休眠、延时截图、排窗口小抄
+
+    private static func testMisc(menu: NSMenu?, recorder: RecorderTool) {
+        let items = menu?.items ?? []
+        let titles = items.map { $0.attributedTitle?.string ?? $0.title }
+        check(titles.first?.hasPrefix("CPU") == true && titles.contains { $0.hasPrefix("内存") } && titles.contains { $0.hasPrefix("网速") }
+              && titles.contains { $0.hasPrefix("磁盘") } && titles.contains("打开活动监视器（看是哪个软件在占）"),
+              "菜单最上面是系统状态：CPU、内存、网速、磁盘，还能打开活动监视器")
+        check(titles.contains("延时截图") && titles.contains("防休眠：关") && titles.contains("排窗口（系统自带的快捷键）"),
+              "菜单里有延时截图、防休眠、排窗口小抄")
+        let delaySub = items.first { $0.title == "延时截图" }?.submenu?.items.map(\.title) ?? []
+        check(delaySub.starts(with: ["3 秒后截图", "5 秒后截图", "10 秒后截图"]), "延时截图：3 / 5 / 10 秒")
+        let tips = items.first { $0.title == "排窗口（系统自带的快捷键）" }?.submenu?.items.map(\.title) ?? []
+        check(tips == WindowTipsTool.lines, "排窗口小抄：拖到边缘、地球键快捷键都写上了")
+
+        // 系统状态：真的读一次（只读）
+        check(SystemStats.cpuTicks() != nil, "能读到 CPU 计数")
+        let used = SystemStats.memoryUsed() ?? 0
+        check(used > 0 && used < SystemStats.memoryTotal, "已使用内存在 0 和总内存之间（\(SystemText.size(Double(used), decimal: false))）")
+        check((SystemStats.diskAvailable() ?? 0) > 0, "能读到磁盘剩余空间")
+        info("网卡：\(SystemStats.networkCounters().keys.sorted().joined(separator: "、"))；电池：\(SystemStats.battery().map { "\($0.percent)%" } ?? "没有")")
+        let status = SystemStatusTool()
+        _ = status.menuItems()
+        // 系统的 CPU 计数不是时时刻刻在变，隔太短可能还没动：最多等 3 秒
+        let statusDeadline = Date().addingTimeInterval(3)
+        repeat {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+            status.tick()
+        } while status.cpu == nil && Date() < statusDeadline
+        let lines = status.lines
+        check(status.cpu.map { (0...1).contains($0) } == true && (status.down ?? -1) >= 0 && (status.up ?? -1) >= 0,
+              "隔一会儿再取一次 → 算出 CPU 使用率和网速")
+        check(lines.count >= 4 && lines[0].hasSuffix("%") && lines[1].contains("已用") && lines[2].contains("↓")
+              && lines[3].contains("剩余"), "系统状态每一行都有数：\(lines.joined(separator: " | "))")
+
+        // 防休眠（只走逻辑，不真的去挡系统休眠）
+        let awake = KeepAwakeTool()
+        awake.dryRun = true
+        var cups: [Bool] = []
+        awake.onChange = { cups.append($0) }
+        awake.turnOn(minutes: 30)
+        check(awake.isOn && awake.holding && awake.statusTitle == "防休眠中，还剩 30 分钟" && cups.last == true && awake.assertionID == nil,
+              "防休眠 30 分钟：菜单写着还剩 30 分钟，图标换成咖啡杯")
+        let sub = awake.menuItems().first?.submenu?.items.map(\.title) ?? []
+        check(awake.menuItems().first?.state == .on && sub.starts(with: ["30 分钟", "1 小时", "2 小时", "一直开着"]) && sub.contains("关掉"),
+              "防休眠菜单：30 分钟 / 1 小时 / 2 小时 / 一直开着 / 关掉")
+        awake.turnOff()
+        check(!awake.isOn && !awake.holding && awake.statusTitle == "防休眠：关" && cups.last == false, "关掉防休眠 → 图标变回扳手")
+        awake.turnOn(minutes: nil)
+        check(awake.statusTitle == "防休眠中（一直开着）", "防休眠一直开着")
+        awake.turnOff()
+        awake.setRecording(true)
+        check(awake.holding && awake.statusTitle == "录屏中，自动防休眠" && cups.last == false, "录屏时自动防休眠（图标还是录屏的红点）")
+        awake.turnOn(until: Date().addingTimeInterval(0.2))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        check(!awake.manualOn && awake.holding, "时间到自动关掉手动的防休眠；录屏还在 → 继续挡着")
+        awake.setRecording(false)
+        check(!awake.holding && !awake.isOn, "录完恢复原样")
+        check(!recorder.isBusy, "录屏没在忙时不防休眠")
+
+        // 延时截图的倒数（不显示窗口、不注册 Esc，倒数调快）
+        let countdown = DelayCountdown(seconds: 3, center: .zero, showWindow: false, interval: 0.05)
+        var fired = 0, cancelled = 0
+        countdown.onFire = { fired += 1 }
+        countdown.onCancel = { cancelled += 1 }
+        countdown.start()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        check(fired == 1 && cancelled == 0 && countdown.remaining == 0 && !countdown.isRunning, "延时截图：倒数 3、2、1 后开始截图")
+        let stopped = DelayCountdown(seconds: 3, center: .zero, showWindow: false, interval: 0.05)
+        var stoppedFired = 0, stoppedCancelled = 0
+        stopped.onFire = { stoppedFired += 1 }
+        stopped.onCancel = { stoppedCancelled += 1 }
+        stopped.start()
+        stopped.cancel()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        check(stoppedFired == 0 && stoppedCancelled == 1, "延时截图：倒数时按 Esc → 取消，不截")
+        check(CountdownWindow(center: .zero, hint: "Esc 取消").panel.contentView?.subviews.count == 2, "倒数的数字下面写着\u{201C}Esc 取消\u{201D}")
     }
 
     private static func findButton(in view: NSView, where match: (NSButton) -> Bool) -> NSButton? {

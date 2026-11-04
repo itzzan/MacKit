@@ -14,6 +14,7 @@ final class ScreenshotTool: ToolModule {
     private var hotKeyID: UInt32?
     private var session: SelectionSession?
     private var isPreparing = false
+    private(set) var delayed: DelayCountdown?
 
     func activate() { registerHotKey() }
 
@@ -52,6 +53,26 @@ final class ScreenshotTool: ToolModule {
                 self.handle(error)
             }
         }
+    }
+
+    /// 延时截图：屏幕中间倒数，倒数完和 ⌘1 一样冻屏框选。趁这几秒打开要截的菜单、把鼠标放到会出提示的地方
+    func startDelayed(seconds: Int) {
+        guard delayed == nil, session == nil, !isPreparing, SelectionSession.active == nil, MeasureSession.active == nil,
+              LongShotSession.active == nil else { return }
+        guard ScreenPermission.readyToTry() else { return }
+        let frame = (NSScreen.withMouse ?? NSScreen.main)?.frame ?? .zero
+        let countdown = DelayCountdown(seconds: seconds, center: CGPoint(x: frame.midX, y: frame.midY))
+        countdown.onFire = { [weak self] in
+            self?.delayed = nil
+            self?.startSelection(delay: 0.15)        // 等倒数的窗口从屏幕上消失再冻屏
+        }
+        countdown.onCancel = { [weak self] in
+            self?.delayed = nil
+            Toast.show("已取消延时截图")
+        }
+        delayed = countdown
+        Log.capture.notice("delayed screenshot in \(seconds)s")
+        countdown.start()
     }
 
     func captureFullScreen() {
@@ -143,6 +164,16 @@ final class ScreenshotTool: ToolModule {
         items.append(ActionMenuItem("长截图（框选后往下滚，拼成一张长图）") { [weak self] in
             self?.startSelection(delay: 0.2, purpose: .longShot)
         })
+        let delayMenu = NSMenu()
+        for seconds in [3, 5, 10] {
+            delayMenu.addItem(ActionMenuItem("\(seconds) 秒后截图") { [weak self] in self?.startDelayed(seconds: seconds) })
+        }
+        delayMenu.addItem(.separator())
+        delayMenu.addItem(.info("趁倒数打开要截的菜单、把鼠标放到会出提示的地方"))
+        delayMenu.addItem(.info("倒数时按 Esc 取消"))
+        let delayItem = NSMenuItem(title: "延时截图", action: nil, keyEquivalent: "")
+        delayItem.submenu = delayMenu
+        items.append(delayItem)
         let colorMenu = NSMenu()
         let hex = ActionMenuItem("HEX，比如 #FF3B30") { Settings.colorAsHex = true }
         hex.state = Settings.colorAsHex ? .on : .off
@@ -204,5 +235,66 @@ final class ScreenshotTool: ToolModule {
                 if response == .OK, let url = panel.url { Settings.saveFolder = url }
             }
         }
+    }
+}
+
+/// 延时截图的倒数：屏幕中间 3、2、1，倒数时按 Esc 取消（你在别的软件里，所以 Esc 临时注册成全局快捷键）
+@MainActor
+final class DelayCountdown {
+    var onFire: (() -> Void)?
+    var onCancel: (() -> Void)?
+    private(set) var remaining: Int
+    let window: CountdownWindow?
+    private let interval: TimeInterval
+    private var timer: Timer?
+    private var escID: UInt32?
+    private(set) var isRunning = false
+
+    /// showWindow = false：不显示窗口、不注册 Esc（自检用）；interval：每一下多久（自检里调快）
+    init(seconds: Int, center: CGPoint, showWindow: Bool = true, interval: TimeInterval = 1) {
+        remaining = max(seconds, 1)
+        window = showWindow ? CountdownWindow(center: center, hint: "Esc 取消") : nil
+        self.interval = interval
+    }
+
+    func start() {
+        guard !isRunning else { return }
+        isRunning = true
+        if window != nil {
+            let esc = HotKeyCombo(keyCode: 53, carbonModifiers: 0, display: "Esc", menuKey: "", menuModifiers: [], note: "")
+            escID = HotKeyCenter.shared.register(esc) { [weak self] in self?.cancel() }
+        }
+        window?.show(remaining)
+        let t = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+    }
+
+    private func tick() {
+        remaining -= 1
+        if remaining > 0 {
+            window?.show(remaining)
+            return
+        }
+        stop()
+        onFire?()
+    }
+
+    func cancel() {
+        guard isRunning else { return }
+        stop()
+        Log.capture.notice("delayed screenshot cancelled")
+        onCancel?()
+    }
+
+    private func stop() {
+        isRunning = false
+        timer?.invalidate()
+        timer = nil
+        if let escID { HotKeyCenter.shared.unregister(escID) }
+        escID = nil
+        window?.close()
     }
 }

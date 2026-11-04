@@ -363,5 +363,33 @@ check(LongShotGeometry.thumbLayout(thumbSize: CGSize(width: 160, height: 1000), 
 check(LongShotGeometry.progressText(totalHeight: 6200, screens: 3.18) == "已拼约 3.2 屏　6200 像素高"
       && LongShotGeometry.progressText(totalHeight: 30000, screens: 13.4) == "已拼约 13 屏　30000 像素高", "长截图：进度文字")
 
+// MARK: 系统状态、防休眠的文字
+check(SystemText.size(312_000_000_000, decimal: true) == "312 GB" && SystemText.size(1_200_000, decimal: true) == "1.2 MB"
+      && SystemText.size(80_400, decimal: true) == "80 KB" && SystemText.size(999, decimal: true) == "999 B",
+      "磁盘、网速按 1000 换算（和访达一致）")
+check(SystemText.size(18.2 * 1_073_741_824, decimal: false) == "18.2 GB" && SystemText.size(24 * 1_073_741_824, decimal: false) == "24 GB"
+      && SystemText.size(2 * 1_099_511_627_776, decimal: false) == "2 TB", "内存按 1024 换算（和活动监视器一致），整数不带 .0")
+check(SystemText.rate(1_234_000) == "1.2 MB/s" && SystemText.rate(80_000) == "80 KB/s" && SystemText.rate(300) == "0 KB/s"
+      && SystemText.rate(-5) == "0 KB/s", "网速：不到 1 KB 也写成 KB，不会出现负数")
+check(SystemText.percent(0.234) == "23%" && SystemText.percent(1.7) == "100%" && SystemText.percent(-1) == "0%", "百分比")
+check(SystemText.cpuUsage(previous: [100, 50, 800, 0], current: [130, 70, 850, 0]) == 0.5, "CPU：忙的计数占一半 → 50%")
+check(SystemText.cpuUsage(previous: [UInt32.max - 9, 0, 0, 0], current: [10, 0, 20, 0]) == 0.5, "CPU：计数绕回 0 也算得对")
+check(SystemText.cpuUsage(previous: [1, 1, 1, 1], current: [1, 1, 1, 1]) == nil && SystemText.cpuUsage(previous: [], current: [1, 2, 3, 4]) == nil,
+      "CPU：没有变化或没取到 → 先不显示")
+check(SystemText.counterDelta(UInt32.max - 99, 100) == 200, "网卡计数过 4 GB 绕回 0，差值照样对")
+check(SystemText.memoryUsed(internalPages: 1000, purgeablePages: 100, wiredPages: 200, compressedPages: 50, pageSize: 16384)
+      == 1150 * 16384, "内存：App 内存（去掉可清除的）+ 联动 + 被压缩")
+check(SystemText.cpuLine(0.23) == "CPU　23%" && SystemText.cpuLine(nil) == "CPU　…"
+      && SystemText.memoryLine(used: UInt64(18.2 * 1_073_741_824), total: 24 * 1_073_741_824) == "内存　已用 18.2 GB / 共 24 GB"
+      && SystemText.networkLine(down: 1_200_000, up: 80_000) == "网速　↓ 1.2 MB/s　↑ 80 KB/s" && SystemText.networkLine(down: nil, up: nil) == "网速　…"
+      && SystemText.diskLine(available: 312_000_000_000) == "磁盘　剩余 312 GB", "系统状态每一行的文字")
+check(SystemText.batteryLine(percent: 86, charging: true, charged: false, onPower: true) == "电池　86%，充电中"
+      && SystemText.batteryLine(percent: 100, charging: false, charged: true, onPower: true) == "电池　100%，已充满"
+      && SystemText.batteryLine(percent: 80, charging: false, charged: false, onPower: true) == "电池　80%，接着电源"
+      && SystemText.batteryLine(percent: 54, charging: false, charged: false, onPower: false) == "电池　54%，用电池", "电池的几种状态")
+check(SystemText.remaining(42 * 60) == "还剩 42 分钟" && SystemText.remaining(41 * 60 + 10) == "还剩 42 分钟"
+      && SystemText.remaining(72 * 60) == "还剩 1 小时 12 分钟" && SystemText.remaining(120 * 60) == "还剩 2 小时"
+      && SystemText.remaining(59) == "还剩不到 1 分钟", "防休眠还剩多久")
+
 print(failures == 0 ? "UNIT TESTS OK" : "UNIT TESTS FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)

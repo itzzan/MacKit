@@ -41,7 +41,21 @@ final class RecorderTool: ToolModule {
         var nextSegmentURL: URL { tempDirectory.appendingPathComponent("part-\(segments.count + 1).mp4") }
     }
 
-    private(set) var state: State = .idle
+    private(set) var state: State = .idle {
+        didSet {
+            let busy = isBusy
+            if busy != wasBusy { wasBusy = busy; onBusyChange?(busy) }
+        }
+    }
+    private var wasBusy = false
+    /// 录屏忙着（等定时开始、倒数、录制、暂停、收尾）：这期间自动防休眠（AppDelegate 里接上）
+    var onBusyChange: ((Bool) -> Void)?
+    var isBusy: Bool {
+        switch state {
+        case .idle, .choosing, .ready: false
+        default: true
+        }
+    }
     /// 菜单栏图标显示什么：nil = 平常的扳手；有字 = 红点加时长（AppDelegate 里接上）
     var onIndicator: ((String?) -> Void)?
     private(set) var hotKeyRegistered = false
