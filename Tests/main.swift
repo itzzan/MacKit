@@ -77,5 +77,38 @@ check(corner.frame == CGRect(x: 1312, y: 0, width: 200, height: 100), "鼠标在
 let huge = PinGeometry.initialPlacement(size: CGSize(width: 3000, height: 1000), around: CGPoint(x: 700, y: 500), visible: visible)
 check(abs(huge.frame.width - 1512 * 0.9) < 0.001 && visible.contains(huge.frame), "超大图缩到屏幕的 90% 以内")
 
+// 台阶 3：调整选区、工具栏位置、箭头
+let box = CGRect(x: 100, y: 100, width: 200, height: 100)
+let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+check(EditGeometry.handleCenter(.topRight, of: box) == CGPoint(x: 300, y: 200), "右上角小方块在框的右上角")
+check(EditGeometry.handle(at: CGPoint(x: 301, y: 199), in: box) == .topRight, "鼠标在右上角附近 → 认出右上角小方块")
+check(EditGeometry.handle(at: CGPoint(x: 100, y: 150), in: box) == .left, "鼠标在左边中点 → 认出左边小方块")
+check(EditGeometry.handle(at: CGPoint(x: 200, y: 150), in: box) == nil, "框中间不算小方块")
+check(EditGeometry.resize(box, handle: .bottomRight, to: CGPoint(x: 350, y: 50), bounds: screen)
+      == CGRect(x: 100, y: 50, width: 250, height: 150), "拖右下角改大小，左上角不动")
+check(EditGeometry.resize(box, handle: .left, to: CGPoint(x: 400, y: 150), bounds: screen)
+      == CGRect(x: 300, y: 100, width: 100, height: 100), "左边拖过右边 → 框翻过来")
+check(EditGeometry.resize(box, handle: .right, to: CGPoint(x: 2000, y: 150), bounds: screen).maxX == 1512, "拖出屏幕外 → 停在屏幕边上")
+check(EditGeometry.resize(box, handle: .right, to: CGPoint(x: 101, y: 150), bounds: screen).width == 4, "框最小 4 个点宽")
+check(EditGeometry.resize(box, handle: .top, to: CGPoint(x: 999, y: 300), bounds: screen)
+      == CGRect(x: 100, y: 100, width: 200, height: 200), "拖上边只改高度，不改宽度")
+check(EditGeometry.move(box, by: CGVector(dx: -500, dy: 0), within: screen) == CGRect(x: 0, y: 100, width: 200, height: 100), "挪框不出屏幕")
+check(EditGeometry.move(box, by: CGVector(dx: 1, dy: 0), within: screen).minX == 101, "方向键挪 1 个点")
+
+let bar = CGSize(width: 300, height: 40)
+check(EditGeometry.toolbarOrigin(size: bar, selection: CGRect(x: 500, y: 300, width: 400, height: 300), bounds: screen)
+      == CGPoint(x: 600, y: 252), "工具栏在框下方、右对齐")
+check(EditGeometry.toolbarOrigin(size: bar, selection: CGRect(x: 500, y: 20, width: 400, height: 300), bounds: screen)
+      == CGPoint(x: 600, y: 328), "框贴着屏幕底部 → 工具栏放上方")
+check(EditGeometry.toolbarOrigin(size: bar, selection: screen, bounds: screen)
+      == CGPoint(x: 1208, y: 8), "整屏截图 → 工具栏放在框里右下角")
+check(EditGeometry.toolbarOrigin(size: bar, selection: CGRect(x: 0, y: 300, width: 100, height: 100), bounds: screen).x == 4,
+      "框很窄靠左 → 工具栏不出屏幕左边")
+
+let head = EditGeometry.arrow(from: .zero, to: CGPoint(x: 100, y: 0), lineWidth: 4)
+check(head.tip == CGPoint(x: 100, y: 0) && head.left == CGPoint(x: 84, y: 8) && head.right == CGPoint(x: 84, y: -8),
+      "箭头头部：尖在终点，两翼对称")
+check(abs(head.shaftEnd.x - 87.2) < 0.001, "箭杆画到箭头里面一点，接缝不露白")
+
 print(failures == 0 ? "UNIT TESTS OK" : "UNIT TESTS FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)

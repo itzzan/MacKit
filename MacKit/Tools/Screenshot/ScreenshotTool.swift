@@ -1,10 +1,12 @@
 @preconcurrency import ScreenCaptureKit
 import AppKit
 
-/// 截图积木：快捷键 / 菜单 → 冻住屏幕 → 框选或单击窗口 → 复制到剪贴板 + 存文件
+/// 截图积木：快捷键 / 菜单 → 冻住屏幕 → 框选或单击窗口 → 标注 → 复制并保存 / 贴图 / 另存
 @MainActor
 final class ScreenshotTool: ToolModule {
     private(set) var hotKeyRegistered = false
+    /// 截图后点 📌 / 按 ⌘2：交给贴图积木（AppDelegate 里接上）
+    var onPin: ((SelectionResult) -> Void)?
     private var hotKeyID: UInt32?
     private var session: SelectionSession?
     private var isPreparing = false
@@ -33,10 +35,11 @@ final class ScreenshotTool: ToolModule {
             do {
                 let frozen = try await ScreenCapturer.capture()
                 guard !frozen.isEmpty else { return }
-                let session = SelectionSession(screens: frozen, windowFrames: windows)
-                session.onFinish = { [weak self] result in
+                let session = SelectionSession(screens: frozen, windowFrames: windows,
+                                               quickMode: Settings.screenshotQuickMode)
+                session.onFinish = { [weak self] outcome in
                     self?.session = nil
-                    if let result { self?.deliver(result) }
+                    self?.handle(outcome)
                 }
                 self.session = session
                 session.begin()
@@ -58,6 +61,22 @@ final class ScreenshotTool: ToolModule {
             } catch {
                 self.handle(error)
             }
+        }
+    }
+
+    /// 截图结束后去哪：复制、贴图、已另存、取消
+    private func handle(_ outcome: SelectionOutcome) {
+        switch outcome {
+        case .copy(let result):
+            deliver(result)
+        case .pin(let result):
+            Log.capture.notice("screenshot pinned \(result.image.width)x\(result.image.height)")
+            onPin?(result)
+        case .saved(let url):
+            Log.capture.notice("saved as \(url.path, privacy: .public)")
+            Toast.show("✓ 已保存：\(url.lastPathComponent)")
+        case .cancelled:
+            break
         }
     }
 
@@ -112,6 +131,9 @@ final class ScreenshotTool: ToolModule {
             items.append(.info("　 先退出 \(rival)，或在下面的「截图快捷键」里换一个"))
         }
         items.append(ActionMenuItem("截取整个屏幕") { [weak self] in self?.captureFullScreen() })
+        let quick = ActionMenuItem("快速模式：松手直接复制，不出标注工具栏") { Settings.screenshotQuickMode.toggle() }
+        quick.state = Settings.screenshotQuickMode ? .on : .off
+        items.append(quick)
 
         let hotKeyMenu = NSMenu()
         for (index, preset) in HotKeyPresets.screenshot.enumerated() {
@@ -155,6 +177,10 @@ final class ScreenshotTool: ToolModule {
         panel.allowsMultipleSelection = false
         panel.prompt = "就存这里"
         panel.directoryURL = Settings.saveFolder
-        if panel.runModal() == .OK, let url = panel.url { Settings.saveFolder = url }
+        panel.begin { response in
+            MainActor.assumeIsolated {
+                if response == .OK, let url = panel.url { Settings.saveFolder = url }
+            }
+        }
     }
 }

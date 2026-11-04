@@ -44,6 +44,14 @@ enum HotKeyPresets {
     ]
 }
 
+/// 紧急退出：MacKit 卡住时也能用（全局快捷键在卡住时照样收得到）。
+/// MacKit 不在 Dock 里，系统的"强制退出"窗口找不到它，所以要有这个
+enum EmergencyHotKey {
+    static let quit = HotKeyCombo(keyCode: UInt32(kVK_ANSI_Q), carbonModifiers: UInt32(controlKey | optionKey | cmdKey),
+                                  display: "⌃⌥⌘Q", menuKey: "q", menuModifiers: [.control, .option, .command],
+                                  note: "MacKit 卡住时紧急退出")
+}
+
 /// 贴图的一对快捷键：贴图 + 隐藏/显示全部
 struct PinHotKeys {
     let pin: HotKeyCombo
@@ -114,6 +122,23 @@ enum Settings {
     }
 
     static var pinHotKeys: PinHotKeys { PinHotKeyPresets.all[pinHotKeyIndex] }
+
+    /// 快速模式：框选松手直接复制，不出标注工具栏
+    static var screenshotQuickMode: Bool {
+        get { store.bool(forKey: "screenshot.quickMode") }
+        set { store.set(newValue, forKey: "screenshot.quickMode") }
+    }
+
+    /// 标注上次用的颜色、粗细
+    static var annotationColorIndex: Int {
+        get { store.object(forKey: "annotate.color") as? Int ?? 0 }
+        set { store.set(newValue, forKey: "annotate.color") }
+    }
+
+    static var annotationSizeIndex: Int {
+        get { store.object(forKey: "annotate.size") as? Int ?? 1 }
+        set { store.set(newValue, forKey: "annotate.size") }
+    }
 
     static var askedScreenPermission: Bool {
         get { store.bool(forKey: "permission.askedScreen") }

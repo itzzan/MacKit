@@ -84,23 +84,24 @@ final class PinWindow: NSPanel {
         Toast.show("✓ 已复制这张贴图")
     }
 
+    /// 另存为：用不卡人的方式打开保存窗口（见 SelectionSession.saveAs 的说明）
     func saveAs() {
+        guard let png = ImageOutput.pngData(of: image, pointSize: basePointSize) else { return }
         NSApp.activate(ignoringOtherApps: true)
         let panel = NSSavePanel()
-        panel.level = .modalPanel                       // 别被贴图挡住
         panel.allowedContentTypes = [.png]
         panel.directoryURL = Settings.saveFolder
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        panel.nameFieldStringValue = "MacKit_贴图_\(formatter.string(from: Date())).png"
-        guard panel.runModal() == .OK, let url = panel.url,
-              let png = ImageOutput.pngData(of: image, pointSize: basePointSize) else { return }
-        do {
-            try png.write(to: url, options: .atomic)
-            Toast.show("✓ 已保存")
-        } catch {
-            Toast.show("保存失败：\(error.localizedDescription)", seconds: 3)
+        panel.nameFieldStringValue = "MacKit_贴图_\(SelectionSession.timestamp()).png"
+        panel.begin { response in
+            MainActor.assumeIsolated {
+                guard response == .OK, let url = panel.url else { return }
+                do {
+                    try png.write(to: url, options: .atomic)
+                    Toast.show("✓ 已保存")
+                } catch {
+                    Toast.show("保存失败：\(error.localizedDescription)", seconds: 3)
+                }
+            }
         }
     }
 

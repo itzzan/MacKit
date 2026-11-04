@@ -22,11 +22,21 @@ final class PinTool: ToolModule {
     // MARK: 贴图
 
     func pinFromClipboard() {
+        // 正在截图标注：⌘2 = 把这次截图（带标注）钉在原位置
+        if let session = SelectionSession.active {
+            if session.isEditing { session.finishPin() }
+            return                      // 还在框选时不贴，免得贴图被冻住的画面挡住
+        }
         guard let content = PinContentReader.read(.general) else {
             Toast.show("剪贴板里没有图片或文字")
             return
         }
         show(makePin(for: content, mouse: NSEvent.mouseLocation))
+    }
+
+    /// 截图编辑完直接贴：钉在截取的原位置
+    func pin(_ result: SelectionResult) {
+        show(PinWindow(image: result.image, pointSize: result.pointSize, frame: result.globalFrame, scale: 1))
     }
 
     /// 只造窗口不显示（自检也用它）

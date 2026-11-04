@@ -13,8 +13,9 @@ enum SelfTest {
 
     private static func info(_ text: String) { print("INFO", text) }
 
-    static func run(statusItem: NSStatusItem, screenshot: ScreenshotTool, pin: PinTool) {
+    static func run(statusItem: NSStatusItem, screenshot: ScreenshotTool, pin: PinTool, emergencyQuit: Bool) {
         check(statusItem.button?.image != nil, "菜单栏图标已创建")
+        check(emergencyQuit, "紧急退出快捷键 \(EmergencyHotKey.quit.display) 已注册")
         info("截图快捷键 \(Settings.screenshotHotKey.display) 注册\(screenshot.hotKeyRegistered ? "成功" : "失败")")
         if let rival = Settings.screenshotHotKey.runningRival { info("\(rival) 正开着，也在用这个快捷键") }
         info("贴图快捷键 \(Settings.pinHotKeys.pin.display) / \(Settings.pinHotKeys.toggle.display) 注册\(pin.hotKeysRegistered ? "成功" : "失败")")
@@ -32,6 +33,9 @@ enum SelfTest {
         testOutput()
         testPinWindow()
         testPinContent(pin: pin)
+        testAnnotationExport()
+        testEditingFlow()
+        testTextEditing()
 
         print(failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED (\(failures))")
         exit(failures == 0 ? 0 : 1)
@@ -230,7 +234,268 @@ enum SelfTest {
         check(PinContentReader.read(pb) == nil, "剪贴板是空的 → 不贴，给提示")
     }
 
+    // MARK: 标注导出（每种工具画在假图片上，检查像素）
+
+    private static func testAnnotationExport() {
+        let viewSize = CGSize(width: 1512, height: 982)
+        let image = makeTestImage(width: 3024, height: 1964)
+        let mosaic = MosaicSource(image: image, viewSize: viewSize)
+        let sel = CGRect(x: 50, y: 550, width: 500, height: 400)
+        // 视图坐标(点) → 导出图里的像素（左上原点）
+        func px(_ x: CGFloat, _ y: CGFloat) -> (Int, Int) { (Int((x - sel.minX) * 2), Int((sel.maxY - y) * 2)) }
+
+        let items: [Annotation] = [
+            Annotation(tool: .rect, color: .red, size: .medium, points: [CGPoint(x: 300, y: 600), CGPoint(x: 400, y: 700)]),
+            Annotation(tool: .mosaic, color: .red, size: .thick, points: [CGPoint(x: 150, y: 800), CGPoint(x: 250, y: 860)]),
+            Annotation(tool: .number, color: .red, size: .medium, points: [CGPoint(x: 450, y: 900)], number: 1),
+            Annotation(tool: .arrow, color: .red, size: .medium, points: [CGPoint(x: 100, y: 600), CGPoint(x: 250, y: 650)]),
+            Annotation(tool: .highlighter, color: .yellow, size: .medium, points: [CGPoint(x: 300, y: 900), CGPoint(x: 400, y: 900)]),
+            Annotation(tool: .pen, color: .blue, size: .medium, points: [CGPoint(x: 60, y: 560), CGPoint(x: 120, y: 580)]),
+            Annotation(tool: .text, color: .red, size: .thick, points: [CGPoint(x: 60, y: 760)], text: "Hi 你好"),
+        ]
+        guard let result = AnnotationExporter.export(image: image, viewSize: viewSize, selection: sel,
+                                                     screenOrigin: .zero, annotations: items, mosaic: mosaic) else {
+            check(false, "导出带标注的图"); return
+        }
+        let out = result.image
+        check(out.width == 1000 && out.height == 800 && result.pointSize == NSSize(width: 500, height: 400),
+              "导出 1000×800 像素（Retina 2 倍），标注也是 2 倍")
+
+        let isRed = { (p: (r: Int, g: Int, b: Int)) in p.r > 200 && p.g < 110 && p.b < 110 }
+        var (x, y) = px(300, 650)
+        check(isRed(pixel(out, x: x, y: y)), "矩形的边是红色")
+        (x, y) = px(350, 650)
+        let inside = pixel(out, x: x, y: y)
+        check(abs(inside.r - inside.g) < 20, "矩形中间是空的（只描边）")
+        (x, y) = px(175, 625)
+        check(isRed(pixel(out, x: x, y: y)), "箭头杆是红色")
+        (x, y) = px(442, 900)
+        check(isRed(pixel(out, x: x, y: y)), "序号是红色实心圆")
+        (x, y) = px(90, 570)
+        let pen = pixel(out, x: x, y: y)
+        check(pen.b > 200 && pen.r < 60, "画笔是蓝色")
+        (x, y) = px(350, 900)
+        let hl = pixel(out, x: x, y: y)
+        check(hl.r > 160 && hl.r < 235 && hl.b < 100, "荧光笔是半透明黄色（盖在灰底上）")
+
+        // 马赛克：蓝块右边缘在 x = 200 点，16 点一格 → 跨边缘那格是蓝灰混色，同一格里颜色一样
+        (x, y) = px(200, 830)
+        let mixed = pixel(out, x: x, y: y)
+        check(mixed.b > mixed.g + 40 && mixed.b < 245 && mixed.r > 15, "马赛克把蓝块边缘糊成一格一格")
+        let (ax, ay) = px(195, 830), (bx, by) = px(205, 830)
+        let a = pixel(out, x: ax, y: ay), b = pixel(out, x: bx, y: by)
+        check(abs(a.r - b.r) <= 2 && abs(a.g - b.g) <= 2 && abs(a.b - b.b) <= 2, "马赛克同一格里颜色一样")
+        (x, y) = px(235, 830)
+        let grayBlock = pixel(out, x: x, y: y)
+        let original = pixel(image, x: 470, y: 304)       // 同一位置在原图里的颜色（屏幕像素）
+        check(abs(grayBlock.r - original.r) <= 2 && abs(grayBlock.b - original.b) <= 2,
+              "马赛克只糊画面，不会把别处染色")
+
+        let textRect = AnnotationText.rect(for: items[6])
+        var redHits = 0
+        for ty in stride(from: textRect.minY, to: textRect.maxY, by: 1) {
+            for tx in stride(from: textRect.minX, to: textRect.maxX, by: 1) {
+                let (qx, qy) = px(tx, ty)
+                if isRed(pixel(out, x: qx, y: qy)) { redHits += 1 }
+            }
+        }
+        check(redHits > 20, "文字画在了它的位置上")
+    }
+
+    // MARK: 编辑流程（不显示窗口，直接把鼠标键盘事件喂给选区视图）
+
+    private static func testEditingFlow() {
+        let viewSize = CGSize(width: 1512, height: 982)
+        let image = makeTestImage(width: 3024, height: 1964)
+        let container = NSView(frame: CGRect(origin: .zero, size: viewSize))
+        let view = SelectionView(frame: container.bounds, image: image, windowRects: [], scale: 2)
+        container.addSubview(view)
+        let editor = AnnotationEditor(container: container, mosaic: MosaicSource(image: image, viewSize: viewSize))
+        defer { editor.tearDown() }
+        var done = 0, cancelled = 0
+        view.onDone = { done += 1 }
+        view.onCancel = { cancelled += 1 }
+
+        let start = CGRect(x: 200, y: 300, width: 400, height: 300)
+        view.beginEditing(editor, selection: start)
+        check(view.mode == .editing && editor.canAdjustSelection, "松手后进入编辑，框还能调")
+        let bar = editor.toolbar.frame
+        check(editor.toolbar.superview === container && bar.maxY <= start.minY && bar.maxX <= start.maxX + 0.5
+              && bar.width > 300 && bar.height > 30,
+              "工具栏出现在框的下方、右对齐（\(Int(bar.width))×\(Int(bar.height)) 点）")
+        check(!editor.toolbar.isShowingProperties, "还没选工具时，不显示颜色和粗细")
+
+        view.mouseDown(with: mouse(.leftMouseDown, 600, 300))
+        view.mouseDragged(with: mouse(.leftMouseDragged, 700, 250))
+        view.mouseUp(with: mouse(.leftMouseUp, 700, 250))
+        let resized = CGRect(x: 200, y: 250, width: 500, height: 350)
+        check(view.currentSelection == resized && editor.selection == resized, "拖右下角小方块改大小")
+
+        view.mouseDown(with: mouse(.leftMouseDown, 400, 400))
+        view.mouseDragged(with: mouse(.leftMouseDragged, 410, 390))
+        view.mouseUp(with: mouse(.leftMouseUp, 410, 390))
+        check(view.currentSelection == resized.offsetBy(dx: 10, dy: -10), "拖框里面挪位置")
+
+        view.keyDown(with: key("", code: 124))
+        check(view.currentSelection?.minX == 211, "方向键 → 挪 1 个点")
+        let fixed = view.currentSelection ?? .zero
+
+        view.keyDown(with: key("r", code: 15))
+        check(editor.tool == .rect && editor.toolbar.isShowingProperties, "按 R 选矩形，出现颜色和粗细")
+        view.mouseDown(with: mouse(.leftMouseDown, 300, 350))
+        view.mouseDragged(with: mouse(.leftMouseDragged, 350, 400))
+        view.mouseUp(with: mouse(.leftMouseUp, 400, 450))
+        check(editor.document.items.count == 1 && editor.document.items[0].box == CGRect(x: 300, y: 350, width: 100, height: 100),
+              "画了一个矩形")
+        check(!editor.canAdjustSelection, "画了第一笔，框就固定了")
+
+        view.keyDown(with: key("r", code: 15))
+        check(editor.tool == nil, "再按一次 R 放下工具")
+        view.mouseDown(with: mouse(.leftMouseDown, fixed.maxX, fixed.minY))
+        view.mouseDragged(with: mouse(.leftMouseDragged, fixed.maxX + 100, fixed.minY - 50))
+        view.mouseUp(with: mouse(.leftMouseUp, fixed.maxX + 100, fixed.minY - 50))
+        check(view.currentSelection == fixed, "框固定后拖小方块也不会变")
+
+        _ = view.performKeyEquivalent(with: key("z", code: 6, mods: .command))
+        check(editor.document.items.isEmpty, "⌘Z 撤销")
+        _ = view.performKeyEquivalent(with: key("z", code: 6, mods: [.command, .shift]))
+        check(editor.document.items.count == 1, "⇧⌘Z 重做")
+
+        view.keyDown(with: key("n", code: 45))
+        view.mouseDown(with: mouse(.leftMouseDown, 500, 500)); view.mouseUp(with: mouse(.leftMouseUp, 500, 500))
+        view.mouseDown(with: mouse(.leftMouseDown, 550, 500)); view.mouseUp(with: mouse(.leftMouseUp, 550, 500))
+        check(editor.document.items.filter { $0.tool == .number }.map(\.number) == [1, 2], "序号点两下 → 1、2")
+
+        view.keyDown(with: key("t", code: 17))
+        view.mouseDown(with: mouse(.leftMouseDown, 250, 500)); view.mouseUp(with: mouse(.leftMouseUp, 250, 500))
+        check(editor.isEditingText, "文字工具点一下出现输入框")
+        editor.textView?.insertText("你好 MacKit", replacementRange: NSRange(location: NSNotFound, length: 0))
+        if let tv = editor.textView { _ = editor.textView(tv, doCommandBy: #selector(NSResponder.cancelOperation(_:))) }
+        check(!editor.isEditingText && editor.document.items.last?.text == "你好 MacKit", "打中文，按 Esc 结束打字，字留下")
+        view.mouseDown(with: mouse(.leftMouseDown, 260, 420)); view.mouseUp(with: mouse(.leftMouseUp, 260, 420))
+        view.mouseDown(with: mouse(.leftMouseDown, 300, 400))   // 没打字就点别处
+        check(editor.document.items.filter { $0.tool == .text }.count == 1, "空的输入框不会留下")
+
+        let count = editor.document.items.count
+        for tool in [AnnotationTool.ellipse, .arrow, .pen, .highlighter, .mosaic] {
+            editor.selectTool(tool)
+            view.mouseDown(with: mouse(.leftMouseDown, 320, 320))
+            view.mouseDragged(with: mouse(.leftMouseDragged, 360, 340))
+            view.mouseUp(with: mouse(.leftMouseUp, 400, 360))
+        }
+        check(editor.document.items.count == count + 5, "椭圆、箭头、画笔、荧光笔、马赛克各画一下")
+        check(Set(editor.document.items.map(\.tool)) == Set(AnnotationTool.allCases), "八种工具都画上了")
+
+        editor.selectTool(nil)
+        view.keyDown(with: key("\r", code: 36))
+        check(done == 1, "回车 = 完成")
+        view.mouseDown(with: mouse(.leftMouseDown, 400, 400, clicks: 2))
+        check(done == 2, "没选工具时在框里双击 = 完成")
+        view.keyDown(with: key("\u{1b}", code: 53))
+        check(cancelled == 1, "Esc = 取消")
+
+        if let rect = view.currentSelection,
+           let out = AnnotationExporter.export(image: image, viewSize: viewSize, selection: rect, screenOrigin: .zero,
+                                               annotations: editor.document.items,
+                                               mosaic: MosaicSource(image: image, viewSize: viewSize)) {
+            check(out.image.width == Int(rect.width * 2), "编辑完导出，尺寸和框一致")
+        } else { check(false, "编辑完导出") }
+    }
+
+    // MARK: 文字工具：拼音看得见、写好的字能再改（2026-11-04 用户验收时提的两个问题）
+
+    private static func testTextEditing() {
+        let viewSize = CGSize(width: 1512, height: 982)
+        let image = makeTestImage(width: 3024, height: 1964)
+        let container = NSView(frame: CGRect(origin: .zero, size: viewSize))
+        let view = SelectionView(frame: container.bounds, image: image, windowRects: [], scale: 2)
+        container.addSubview(view)
+        // 放进一个不显示的窗口：输入框要在窗口里，系统才把它当成"正在拼写"
+        let window = OverlayWindow(frame: CGRect(origin: CGPoint(x: -20000, y: -20000), size: viewSize))
+        window.contentView = container
+        let editor = AnnotationEditor(container: container, mosaic: MosaicSource(image: image, viewSize: viewSize))
+        defer { editor.tearDown(); window.contentView = nil }
+        var done = 0
+        view.onDone = { done += 1 }
+        view.beginEditing(editor, selection: CGRect(x: 100, y: 100, width: 800, height: 600))
+        let noRange = NSRange(location: NSNotFound, length: 0)
+
+        editor.selectTool(.text)
+        view.mouseDown(with: mouse(.leftMouseDown, 200, 500)); view.mouseUp(with: mouse(.leftMouseUp, 200, 500))
+        guard let tv = editor.textView else { check(false, "文字工具出现输入框"); return }
+
+        // 1. 拼音拼写中：输入框要跟着变宽
+        tv.setMarkedText("nihaoshijie", selectedRange: NSRange(location: 11, length: 0), replacementRange: noRange)
+        // 注意：不能碰 tv.layoutManager，一碰输入框就退回旧排版方式，正在拼写的拼音会被直接定下来
+        let used = ceil(tv.attributedString().boundingRect(with: CGSize(width: 4000, height: 4000),
+                                                            options: [.usesLineFragmentOrigin, .usesFontLeading]).width)
+        check(tv.hasMarkedText() && tv.markedRange().length == 11 && tv.frame.width >= used && used > 50,
+              "拼音拼写中，输入框跟着变宽（拼音 \(Int(used)) 点，输入框 \(Int(tv.frame.width)) 点）")
+        check(tv.drawsBackground && (tv.backgroundColor.alphaComponent > 0.3), "编辑中的输入框有半透明衬底，白底上也看得清")
+        if let rep = tv.bitmapImageRepForCachingDisplay(in: tv.bounds) {
+            tv.cacheDisplay(in: tv.bounds, to: rep)
+            var ink = 0
+            for y in 0..<rep.pixelsHigh {
+                for x in 0..<rep.pixelsWide {
+                    if let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                       c.alphaComponent > 0.5, c.redComponent + c.greenComponent + c.blueComponent < 1.8 { ink += 1 }
+                }
+            }
+            check(ink > 40, "拼音真的画出来了（\(ink) 个深色像素）")
+        }
+        check(tv.hasMarkedText(), "量完宽度、截完画面，拼音还在拼写中（没被提前定下来）")
+        tv.insertText("你好世界", replacementRange: tv.markedRange())
+        check(!tv.hasMarkedText() && tv.string == "你好世界", "选字后拼音换成汉字")
+        editor.commitText()
+        check(editor.document.items.count == 1 && editor.document.items[0].text == "你好世界", "打完的字落下")
+
+        // 2. 用文字工具点已有的字 → 接着改，改完替换原来那条
+        let textRect = AnnotationText.rect(for: editor.document.items[0])
+        view.mouseDown(with: mouse(.leftMouseDown, textRect.midX, textRect.midY))
+        view.mouseUp(with: mouse(.leftMouseUp, textRect.midX, textRect.midY))
+        check(editor.isEditingText && editor.textView?.string == "你好世界" && editor.canvas.annotations.isEmpty,
+              "文字工具点已有的字 → 原文进了输入框，画面上先不画原来那条")
+        editor.textView?.insertText("！", replacementRange: noRange)
+        editor.commitText()
+        check(editor.document.items.count == 1 && editor.document.items[0].text == "你好世界！", "改完替换原来那条，不会多出一条")
+
+        _ = view.performKeyEquivalent(with: key("z", code: 6, mods: .command))
+        check(editor.document.items.first?.text == "你好世界", "⌘Z 撤销这次修改")
+        _ = view.performKeyEquivalent(with: key("z", code: 6, mods: [.command, .shift]))
+        check(editor.document.items.first?.text == "你好世界！", "⇧⌘Z 再改回来")
+
+        // 3. 没选工具时双击字 → 接着改（不是"完成"）
+        editor.selectTool(nil)
+        view.mouseDown(with: mouse(.leftMouseDown, textRect.midX, textRect.midY, clicks: 2))
+        check(editor.isEditingText && done == 0, "没选工具时双击字 → 接着改，不会直接完成")
+
+        // 4. 把字删光 → 这条文字被删掉，也能撤销回来
+        if let tv = editor.textView {
+            tv.selectAll(nil)
+            tv.insertText("", replacementRange: NSRange(location: 0, length: (tv.string as NSString).length))
+        }
+        editor.commitText()
+        check(editor.document.items.isEmpty, "字删光 → 这条文字没了")
+        _ = view.performKeyEquivalent(with: key("z", code: 6, mods: .command))
+        check(editor.document.items.first?.text == "你好世界！", "删掉的字也能 ⌘Z 撤销回来")
+
+        // 5. 改字时换颜色、换粗细，改完生效
+        editor.selectTool(.text)
+        view.mouseDown(with: mouse(.leftMouseDown, textRect.midX, textRect.midY))
+        editor.setColor(.blue)
+        editor.setSize(.thick)
+        editor.commitText()
+        check(editor.document.items.first?.color == .blue && editor.document.items.first?.size == .thick,
+              "改字时换颜色和粗细，改完生效")
+    }
+
     // MARK: 工具
+
+    private static func key(_ chars: String, code: UInt16, mods: NSEvent.ModifierFlags = []) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: mods, timestamp: 0, windowNumber: 0,
+                         context: nil, characters: chars, charactersIgnoringModifiers: chars, isARepeat: false,
+                         keyCode: code)!
+    }
 
     private static func scrollEvent(lines: Int32, option: Bool) -> NSEvent? {
         guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1,
@@ -241,9 +506,9 @@ enum SelfTest {
 
     private static let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
 
-    private static func mouse(_ type: NSEvent.EventType, _ x: CGFloat, _ y: CGFloat) -> NSEvent {
+    private static func mouse(_ type: NSEvent.EventType, _ x: CGFloat, _ y: CGFloat, clicks: Int = 1) -> NSEvent {
         NSEvent.mouseEvent(with: type, location: CGPoint(x: x, y: y), modifierFlags: [], timestamp: 0,
-                           windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+                           windowNumber: 0, context: nil, eventNumber: 0, clickCount: clicks, pressure: 1)!
     }
 
     /// 灰底；顶部 100 行红色；像素 (200…400, 200…400) 一个蓝色方块（像素坐标左上为原点）

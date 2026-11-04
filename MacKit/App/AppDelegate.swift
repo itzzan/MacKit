@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let screenshot = ScreenshotTool()
     private let pin = PinTool()
     private lazy var modules: [ToolModule] = [screenshot, pin]
+    private(set) var emergencyQuitRegistered = false
 
     init(selfTest: Bool) {
         self.selfTest = selfTest
@@ -39,10 +40,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.menu = menu
         statusItem = item
 
+        screenshot.onPin = { [weak self] result in self?.pin.pin(result) }
         for module in modules { module.activate() }
+        emergencyQuitRegistered = HotKeyCenter.shared.register(EmergencyHotKey.quit) {
+            Log.app.notice("emergency quit")
+            exit(0)                          // 不走正常退出流程，卡在对话框里也能退
+        } != nil
         Log.app.notice("MacKit \(AppInfo.version, privacy: .public) launched")
 
-        if selfTest { SelfTest.run(statusItem: item, screenshot: screenshot, pin: pin) }
+        if selfTest { SelfTest.run(statusItem: item, screenshot: screenshot, pin: pin, emergencyQuit: emergencyQuitRegistered) }
     }
 
     /// 每次点开菜单都重新生成，这样设置改了马上能看到
@@ -56,5 +62,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(.info("MacKit \(AppInfo.version)"))
         menu.addItem(ActionMenuItem("退出 MacKit", key: "q", modifiers: .command) { NSApp.terminate(nil) })
+        if emergencyQuitRegistered { menu.addItem(.info("卡住时按 \(EmergencyHotKey.quit.display) 紧急退出")) }
     }
 }

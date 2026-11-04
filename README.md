@@ -34,9 +34,10 @@ MacKit/
   Tools/
     Screenshot/   截图：冻屏、选区覆盖层、坐标换算、复制和保存
     Pin/          贴图：贴图窗口、缩放透明度、读剪贴板、文字卡片
+    Annotate/     标注：八种工具、工具栏、撤销重做、马赛克、导出
   Resources/      Info.plist
 Config/           签名设置（Local.xcconfig 是本机私有的）
-Tests/            坐标换算、贴图缩放的单元测试
+Tests/            坐标换算、贴图缩放、选区调整的单元测试
 scripts/          编译、测试、安装脚本
 project.yml       Xcode 工程的生成规则
 ```
