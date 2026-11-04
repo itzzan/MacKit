@@ -18,6 +18,8 @@ final class PinWindow: NSPanel {
     private(set) var scale: CGFloat
     var onClosed: ((PinWindow) -> Void)?
     var onCloseAll: (() -> Void)?
+    /// 右键"识别文字"（PinTool 接上）
+    var onRecognize: ((CGImage) -> Void)?
 
     var isClickThrough: Bool { ignoresMouseEvents }
     /// 画面视图。窗口的 contentView 是一个普通的外层视图，画面和标注画板并排放在里面
@@ -170,6 +172,10 @@ final class PinWindow: NSPanel {
         let annotate = ActionMenuItem("标注（空格）") { [weak self] in self?.beginAnnotating() }
         annotate.isEnabled = !isClickThrough
         menu.addItem(annotate)
+        menu.addItem(ActionMenuItem("识别文字") { [weak self] in
+            guard let self else { return }
+            self.onRecognize?(self.originalImage)
+        })
         menu.addItem(.separator())
         menu.addItem(ActionMenuItem("复制", key: "c", modifiers: .command) { [weak self] in self?.copyImage() })
         menu.addItem(ActionMenuItem("另存为…", key: "s", modifiers: .command) { [weak self] in self?.saveAs() })

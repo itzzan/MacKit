@@ -90,6 +90,15 @@ final class ClipboardStore {
         save()
     }
 
+    /// 图片里识别出来的字：存进这条的搜索内容（⌘3 里能搜到）
+    func setRecognizedText(_ id: UUID, _ text: String) {
+        guard let index = items.firstIndex(where: { $0.id == id }), items[index].kind == .image else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        items[index].searchText = "图片 " + String(trimmed.prefix(10_000))
+        save()
+    }
+
     func togglePin(_ id: UUID) {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
         var item = items.remove(at: index)

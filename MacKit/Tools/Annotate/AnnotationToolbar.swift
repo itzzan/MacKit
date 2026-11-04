@@ -104,6 +104,7 @@ final class AnnotationToolbar: NSView {
     var onRedo: (() -> Void)?
     var onPin: (() -> Void)?
     var onSave: (() -> Void)?
+    var onRecognize: (() -> Void)?
     var onCancel: (() -> Void)?
     var onDone: (() -> Void)?
 
@@ -146,6 +147,9 @@ final class AnnotationToolbar: NSView {
         redoButton = ToolbarButton(symbol: "arrow.uturn.forward", tip: "重做（⇧⌘Z）") { [weak self] in self?.onRedo?() }
         let pin = ToolbarButton(symbol: "pin", tip: "贴图：钉在原位置（⌘2）") { [weak self] in self?.onPin?() }
         let save = ToolbarButton(symbol: "square.and.arrow.down", tip: "另存为（⌘S）") { [weak self] in self?.onSave?() }
+        let recognize = ToolbarButton(symbol: "text.viewfinder", tip: "识别文字（框里的字复制出来）") { [weak self] in
+            self?.onRecognize?()
+        }
         let cancel = ToolbarButton(symbol: "xmark", tip: mode == .pin ? "放弃这次画的（Esc）" : "取消（Esc）") { [weak self] in
             self?.onCancel?()
         }
@@ -154,7 +158,7 @@ final class AnnotationToolbar: NSView {
         }
         done.contentTintColor = NSColor(srgbRed: 0.35, green: 0.85, blue: 0.45, alpha: 1)
 
-        let actions: [NSView] = mode == .pin ? [cancel, done] : [pin, save, cancel, done]
+        let actions: [NSView] = mode == .pin ? [cancel, done] : [recognize, pin, save, cancel, done]
         hasPinAndSave = mode == .screenshot
         let mainRow = NSStackView(views: tools + [Self.divider(), undoButton, redoButton, Self.divider()] + actions)
         mainRow.orientation = .horizontal

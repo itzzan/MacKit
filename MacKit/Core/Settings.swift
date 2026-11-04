@@ -103,6 +103,22 @@ enum RecordHotKeyPresets {
     ]
 }
 
+/// 识别文字、测量的快捷键。第一个是默认值（2026-11-04 用户选的 ⌘5、⌘6）
+enum RecognizeHotKeyPresets {
+    static let ocr: [HotKeyCombo] = [
+        HotKeyCombo(keyCode: UInt32(kVK_ANSI_5), carbonModifiers: UInt32(cmdKey),
+                    display: "⌘5", menuKey: "5", menuModifiers: [.command], note: "接着 ⌘1 到 ⌘4"),
+        HotKeyCombo(keyCode: UInt32(kVK_ANSI_O), carbonModifiers: UInt32(controlKey | optionKey),
+                    display: "⌃⌥O", menuKey: "o", menuModifiers: [.control, .option], note: "不占 ⌘ 数字"),
+    ]
+    static let measure: [HotKeyCombo] = [
+        HotKeyCombo(keyCode: UInt32(kVK_ANSI_6), carbonModifiers: UInt32(cmdKey),
+                    display: "⌘6", menuKey: "6", menuModifiers: [.command], note: "接着 ⌘5"),
+        HotKeyCombo(keyCode: UInt32(kVK_ANSI_M), carbonModifiers: UInt32(controlKey | optionKey),
+                    display: "⌃⌥M", menuKey: "m", menuModifiers: [.control, .option], note: "不占 ⌘ 数字"),
+    ]
+}
+
 /// 用户设置，存在 UserDefaults（defaults read local.mackit.MacKit 可查看）
 @MainActor
 enum Settings {
@@ -251,6 +267,22 @@ enum Settings {
             return defaultRecordFolder
         }
         set { store.set(newValue.path, forKey: "record.folder") }
+    }
+
+    static var ocrHotKeyIndex: Int {
+        get { let i = store.integer(forKey: "ocr.hotkeyIndex"); return RecognizeHotKeyPresets.ocr.indices.contains(i) ? i : 0 }
+        set { store.set(newValue, forKey: "ocr.hotkeyIndex") }
+    }
+
+    static var measureHotKeyIndex: Int {
+        get { let i = store.integer(forKey: "measure.hotkeyIndex"); return RecognizeHotKeyPresets.measure.indices.contains(i) ? i : 0 }
+        set { store.set(newValue, forKey: "measure.hotkeyIndex") }
+    }
+
+    /// 按 C 复制颜色：HEX（默认，#FF3B30）还是 RGB（255, 59, 48）
+    static var colorAsHex: Bool {
+        get { store.object(forKey: "color.hex") as? Bool ?? true }
+        set { store.set(newValue, forKey: "color.hex") }
     }
 
     static var askedScreenPermission: Bool {

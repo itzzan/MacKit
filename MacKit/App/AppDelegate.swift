@@ -21,7 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let pin = PinTool()
     private let clipboard = ClipboardTool()
     private let recorder = RecorderTool()
-    private lazy var modules: [ToolModule] = [screenshot, pin, clipboard, recorder]
+    private let ocr = OCRTool()
+    private let measure = MeasureTool()
+    private lazy var modules: [ToolModule] = [screenshot, pin, clipboard, recorder, ocr, measure]
     private(set) var emergencyQuitRegistered = false
 
     init(selfTest: Bool) {
@@ -50,6 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         screenshot.onPin = { [weak self] result in self?.pin.pin(result) }
         clipboard.onPin = { [weak self] pb in self?.pin.pinFromPasteboard(pb) }
         recorder.onIndicator = { [weak self] text in self?.showRecordingIndicator(text) }
+        screenshot.onRecognize = { [weak self] image in self?.ocr.recognize(image) }
+        pin.onRecognize = { [weak self] image in self?.ocr.recognize(image) }
         for module in modules { module.activate() }
         emergencyQuitRegistered = HotKeyCenter.shared.register(EmergencyHotKey.quit) {
             Log.app.notice("emergency quit")

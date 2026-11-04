@@ -82,7 +82,7 @@ final class RecorderTool: ToolModule {
     // MARK: 选区域、控制条
 
     func choose(delay: Double = 0) {
-        guard state == .idle, SelectionSession.active == nil else { return }
+        guard state == .idle, SelectionSession.active == nil, MeasureSession.active == nil else { return }
         guard ScreenPermission.readyToTry() else { return }
         state = .choosing
         Task { @MainActor in

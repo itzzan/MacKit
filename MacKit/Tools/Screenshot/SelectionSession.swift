@@ -13,6 +13,7 @@ enum SelectionOutcome {
     case pin(SelectionResult)        // 钉成贴图
     case saved(URL)                  // 另存为
     case record(RecordTarget)        // 录屏：选好了要录哪里
+    case recognize(SelectionResult)  // 识别文字：选好的那块图
     case cancelled
 }
 
@@ -36,6 +37,18 @@ final class OverlayWindow: NSWindow {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         TextEditingKeys.handle(event, firstResponder: firstResponder) || super.performKeyEquivalent(with: event)
+    }
+}
+
+/// 有文本框的普通窗口（识别结果等）：没有"编辑"菜单，⌘C ⌘V ⌘A ⌘Z 自己转；⌘W 关窗口
+final class EditableWindow: NSWindow {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if mods == .command, event.charactersIgnoringModifiers?.lowercased() == "w" {
+            performClose(nil)
+            return true
+        }
+        return TextEditingKeys.handle(event, firstResponder: firstResponder) || super.performKeyEquivalent(with: event)
     }
 }
 
@@ -68,7 +81,7 @@ final class SelectionSession {
     var onFinish: ((SelectionOutcome) -> Void)?
 
     /// 截图（选完进标注）还是录屏（选完就交出要录哪里）
-    enum Purpose { case screenshot, record }
+    enum Purpose { case screenshot, record, recognize }
 
     private struct ScreenUI {
         let frozen: FrozenScreen
@@ -101,6 +114,7 @@ final class SelectionSession {
     }
 
     private static let recordHint = "选择要录制的区域　·　单击录一个窗口　·　桌面上单击 = 录整屏　·　Esc 或右键取消"
+    private static let recognizeHint = "框选要识别文字的区域　·　单击选窗口　·　Esc 或右键取消"
 
     func begin() {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
@@ -123,7 +137,7 @@ final class SelectionSession {
             container.wantsLayer = true
             let view = SelectionView(frame: bounds, image: frozen.image, windowRects: rects,
                                      scale: frozen.screen.backingScaleFactor,
-                                     hint: purpose == .record ? Self.recordHint : nil)
+                                     hint: purpose == .record ? Self.recordHint : purpose == .recognize ? Self.recognizeHint : nil)
             view.autoresizingMask = [.width, .height]
             container.addSubview(view)
 
@@ -131,6 +145,13 @@ final class SelectionSession {
             view.onCancel = { [weak self] in self?.cancel() }
             view.onDone = { [weak self] in self?.finishCopy() }
             view.onSave = { [weak self] in self?.saveAs() }
+            view.onColorPick = { [weak self] text in
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                Log.capture.notice("color picked")
+                self?.cancel()
+                Toast.show("✓ 已复制颜色 \(text)")
+            }
 
             let overlay = OverlayWindow(frame: frame)
             overlay.contentView = container
@@ -159,6 +180,15 @@ final class SelectionSession {
                                           sources: screen.windowSources, windowFrames: windowFrames, windowIDs: windowIDs)))
             return
         }
+        if purpose == .recognize {
+            if let result = Self.crop(image: screen.frozen.image, viewSize: screen.view.bounds.size, rect: rect,
+                                      screenOrigin: screen.frozen.screen.frame.origin) {
+                end(.recognize(result))
+            } else {
+                end(.cancelled)
+            }
+            return
+        }
         if quickMode {
             if let result = Self.crop(image: screen.frozen.image, viewSize: screen.view.bounds.size, rect: rect,
                                       screenOrigin: screen.frozen.screen.frame.origin) {
@@ -173,6 +203,7 @@ final class SelectionSession {
         editor.onDone = { [weak self] in self?.finishCopy() }
         editor.onPin = { [weak self] in self?.finishPin() }
         editor.onSave = { [weak self] in self?.saveAs() }
+        editor.onRecognize = { [weak self] in self?.finishRecognize() }
         editor.onCancel = { [weak self] in self?.cancel() }
         editing = (screen, editor, mosaic)
         screen.view.beginEditing(editor, selection: rect)
@@ -214,6 +245,14 @@ final class SelectionSession {
         guard !isSaving else { return }
         guard let result = export() else { end(.cancelled); return }
         end(.copy(result))
+    }
+
+    /// 截图工具栏上点"识别文字"：识别框里的原画面（不带标注，认得更准）
+    func finishRecognize() {
+        guard !isSaving, let editing, let rect = editing.screen.view.currentSelection,
+              let result = Self.crop(image: editing.screen.frozen.image, viewSize: editing.screen.view.bounds.size, rect: rect,
+                                     screenOrigin: editing.screen.frozen.screen.frame.origin) else { return }
+        end(.recognize(result))
     }
 
     /// 贴图快捷键或📌按钮

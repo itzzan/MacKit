@@ -22,8 +22,23 @@ final class ClipboardTool: ToolModule {
         guard !CommandLine.arguments.contains("--selftest") else { return }
         store.load()
         watcher.isPaused = { Settings.clipboardPaused }
-        watcher.onSnapshot = { [weak self] snapshot in self?.store.add(snapshot) }
+        watcher.onSnapshot = { [weak self] snapshot in
+            guard let self else { return }
+            let item = self.store.add(snapshot)
+            if item.kind == .image, item.copyCount == 1 { self.recognizeText(in: item) }
+        }
         watcher.start()
+    }
+
+    /// 新复制进来的图片：后台识别里面的字，以后能搜到（台阶 7）
+    func recognizeText(in item: ClipboardItem) {
+        guard let entry = item.pasteboardItems.first?.first(where: { NSBitmapImageRep.imageTypes.contains($0.type) }),
+              let data = store.data(of: entry), let image = NSBitmapImageRep(data: data)?.cgImage else { return }
+        let id = item.id
+        Task { @MainActor in
+            let result = await TextRecognizer.recognize(image)
+            if !result.lines.isEmpty { self.store.setRecognizedText(id, result.text) }
+        }
     }
 
     private func registerHotKey() {
@@ -39,7 +54,7 @@ final class ClipboardTool: ToolModule {
             open.close(returnFocus: true)
             return
         }
-        guard SelectionSession.active == nil else { return }           // 截图中不弹
+        guard SelectionSession.active == nil, MeasureSession.active == nil else { return }    // 截图、测量中不弹
         let p = makePanel()
         panel = p
         p.show(near: NSEvent.mouseLocation)

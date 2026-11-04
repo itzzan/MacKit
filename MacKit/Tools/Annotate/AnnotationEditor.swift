@@ -39,6 +39,7 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
     var onDone: (() -> Void)?
     var onPin: (() -> Void)?
     var onSave: (() -> Void)?
+    var onRecognize: (() -> Void)?
     var onCancel: (() -> Void)?
     /// 工具栏大小变了（选了工具多出一排），使用方自己摆工具栏时用
     var onToolbarChange: (() -> Void)?
@@ -64,6 +65,7 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
         toolbar.onRedo = { [weak self] in self?.redo() }
         toolbar.onPin = { [weak self] in self?.onPin?() }
         toolbar.onSave = { [weak self] in self?.onSave?() }
+        toolbar.onRecognize = { [weak self] in self?.onRecognize?() }
         toolbar.onCancel = { [weak self] in self?.onCancel?() }
         toolbar.onDone = { [weak self] in self?.onDone?() }
         refresh()

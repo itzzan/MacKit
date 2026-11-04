@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import CoreImage
 import ImageIO
 import CoreMedia
 
@@ -45,6 +46,7 @@ enum SelfTest {
         testRecorder(recorder)
         testRecordingExtras(recorder)
         testRecordingOverlays(recorder)
+        testRecognize()
 
         print(failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED (\(failures))")
         exit(failures == 0 ? 0 : 1)
@@ -1029,6 +1031,116 @@ enum SelfTest {
         tool.showControlBar(for: .window(id: 1, globalFrame: CGRect(x: 0, y: 0, width: 400, height: 300)), present: false)
         check(tool.controlBar?.windowTarget == true, "录窗口时控制条知道是窗口")
         tool.reset()
+    }
+
+    // MARK: 识别工具（台阶 7）：识别文字、二维码、剪贴板搜图、取色、测量
+
+    /// 等一个异步结果（自检里用，最多等 timeout 秒）
+    private static func awaitResult<T>(timeout: Double = 20, _ work: @escaping @MainActor () async -> T) -> T? {
+        var result: T?
+        Task { @MainActor in result = await work() }
+        let deadline = Date().addingTimeInterval(timeout)
+        while result == nil && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        return result
+    }
+
+    private static func testRecognize() {
+        // 1. 识别文字：用 MacKit 自己画的文字卡片
+        if let card = TextCard.render("你好 MacKit\nHello World 123\nlet tool = ScreenshotTool()", scale: 2),
+           let result = awaitResult({ await TextRecognizer.recognize(card.image) }) {
+            let all = result.text
+            // 大小写不比：系统会把 MacKit 认成 Mackit（2026-11-04 实测，是系统识别本身的局限）
+            check(all.contains("你好") && all.lowercased().contains("mackit") && all.contains("Hello World"),
+                  "识别文字：中文、英文都认得（认出：\(all.replacingOccurrences(of: "\n", with: " / "))）")
+            check(result.lines.count == 3 && result.lines.first?.contains("你好") == true, "识别文字：从上到下一行行排好")
+            check(result.lines.last?.contains("()") == true, "代码里的括号是半角 ()，不是全角（）")
+        } else { check(false, "识别文字卡片") }
+
+        // 2. 二维码
+        if let qr = makeQRCode("https://example.com/mackit"), let result = awaitResult({ await TextRecognizer.recognize(qr) }) {
+            check(result.codes.first == "https://example.com/mackit", "识别二维码：读出里面的网址")
+            let w = OCRResultWindow(result: result)
+            check(w.buttons["open"]?.isHidden == false && w.buttons["copyCode"]?.isHidden == false, "二维码是网址 → 结果窗口有「打开链接」")
+            w.window.close()
+        } else { check(false, "识别二维码") }
+
+        // 3. 结果窗口
+        let w = OCRResultWindow(result: OCRResult(lines: ["第一行", "second line"], codes: []))
+        check(w.textView.string == "第一行\nsecond line" && w.buttons["open"]?.isHidden == true, "结果窗口：显示识别出的字，没有二维码就没有「打开链接」")
+        w.joinLines()
+        check(w.textView.string == "第一行second line", "结果窗口：「去掉换行」接成一段")
+        check(w.window is EditableWindow, "结果窗口里 ⌘C ⌘V ⌘A ⌘Z 能用、⌘W 能关")
+        w.window.close()
+
+        // 4. 剪贴板历史里的图片：识别后能搜到里面的字（私有剪贴板、临时文件夹）
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mackit-ocr-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let pb = NSPasteboard(name: NSPasteboard.Name("local.mackit.selftest.ocr.\(UUID().uuidString)"))
+        defer { pb.releaseGlobally() }
+        let store = ClipboardStore(directory: dir)
+        if let card = TextCard.render("剪贴板里的截图 Screenshot", scale: 2),
+           let png = ImageOutput.pngData(of: card.image, pointSize: card.pointSize) {
+            pb.clearContents(); pb.setData(png, forType: .png)
+            if case .success(let snap) = ClipboardReader.read(pb, source: nil) {
+                let item = store.add(snap)
+                ClipboardTool(store: store, pasteboard: pb).recognizeText(in: item)
+                let found = awaitResult(timeout: 15) { () -> Bool in
+                    for _ in 0..<150 {
+                        if store.items.first?.searchText.contains("剪贴板") == true { return true }
+                        try? await Task.sleep(for: .milliseconds(100))
+                    }
+                    return false
+                } ?? false
+                check(found && ClipboardText.matches("Screenshot", in: store.items.first?.searchText ?? ""),
+                      "剪贴板历史里的截图：识别完能按图里的字搜到")
+            } else { check(false, "读剪贴板图片") }
+        }
+
+        // 5. 取色：截图时的放大镜
+        let image = makeTestImage(width: 3024, height: 1964)
+        let view = SelectionView(frame: CGRect(x: 0, y: 0, width: 1512, height: 982), image: image, windowRects: [], scale: 2)
+        var picked: String?
+        view.onColorPick = { picked = $0 }
+        view.updateMagnifier(at: CGPoint(x: 150, y: 832))           // 蓝块里（像素 300, 300）
+        let expected = PixelBuffer(image: image)?.rgb(300, 300)
+        check(view.pointedColor.map { $0 == expected! } ?? false, "放大镜取到鼠标指着那一点的颜色（换算成 sRGB）")
+        view.keyDown(with: key("c", code: 8))
+        if let e = expected {
+            check(picked == ColorText.text(e.0, e.1, e.2, hex: Settings.colorAsHex), "按 C 复制颜色（\(picked ?? "没复制")）")
+        }
+
+        // 6. 测量：白底上一块黑（像素 100…299 × 60…179）
+        let measureImage = makeMeasureImage()
+        let mv = MeasureView(frame: CGRect(x: 0, y: 0, width: 200, height: 150), image: measureImage, backingScale: 2)
+        var copied: String?
+        mv.onCopy = { copied = $0 }
+        mv.measureEdges(at: CGPoint(x: 100, y: 75))
+        check(mv.copyText == "100 × 60", "测量：鼠标在黑块里 → 自动量出 100 × 60 点（200 × 120 像素）")
+        mv.measureBox(from: CGPoint(x: 10, y: 10), to: CGPoint(x: 60, y: 40))
+        check(mv.copyText == "50 × 30", "测量：拖框量出 50 × 30 点")
+        mv.keyDown(with: key("c", code: 8))
+        check(copied == "50 × 30", "测量：按 C 复制尺寸")
+
+        let pinMenu = PinWindow(image: image, pointSize: NSSize(width: 100, height: 100),
+                                frame: CGRect(x: 0, y: 0, width: 100, height: 100), scale: 1).makeContextMenu().items.map(\.title)
+        check(pinMenu.contains("识别文字"), "贴图右键菜单里有「识别文字」")
+    }
+
+    private static func makeQRCode(_ text: String) -> CGImage? {
+        guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+        filter.setValue(Data(text.utf8), forKey: "inputMessage")
+        guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 10, y: 10)) else { return nil }
+        return CIContext().createCGImage(output.composited(over: CIImage(color: .white).cropped(to: output.extent)), from: output.extent)
+    }
+
+    private static func makeMeasureImage() -> CGImage {
+        let ctx = CGContext(data: nil, width: 400, height: 300, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: sRGB, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: 400, height: 300))
+        ctx.setFillColor(CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 1))
+        ctx.fill(CGRect(x: 100, y: 300 - 180, width: 200, height: 120))      // 像素 y 60…179（左上原点）
+        return ctx.makeImage()!
     }
 
     /// 造一段纯色渐变的假视频（H.264、没有声音）

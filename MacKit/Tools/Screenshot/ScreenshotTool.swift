@@ -7,6 +7,8 @@ final class ScreenshotTool: ToolModule {
     private(set) var hotKeyRegistered = false
     /// 截图后点 📌 / 按 ⌘2：交给贴图积木（AppDelegate 里接上）
     var onPin: ((SelectionResult) -> Void)?
+    /// 截图工具栏上点"识别文字"：交给识别积木（AppDelegate 里接上）
+    var onRecognize: ((CGImage) -> Void)?
     private var hotKeyID: UInt32?
     private var session: SelectionSession?
     private var isPreparing = false
@@ -25,7 +27,7 @@ final class ScreenshotTool: ToolModule {
 
     /// delay：从菜单点进来时等菜单收起，免得把菜单也截进去
     func startSelection(delay: Double = 0) {
-        guard session == nil, !isPreparing, SelectionSession.active == nil else { return }
+        guard session == nil, !isPreparing, SelectionSession.active == nil, MeasureSession.active == nil else { return }
         guard ScreenPermission.readyToTry() else { return }
         isPreparing = true
         Task { @MainActor in
@@ -75,6 +77,8 @@ final class ScreenshotTool: ToolModule {
         case .saved(let url):
             Log.capture.notice("saved as \(url.path, privacy: .public)")
             Toast.show("✓ 已保存：\(url.lastPathComponent)")
+        case .recognize(let result):
+            onRecognize?(result.image)
         case .record, .cancelled:
             break
         }
@@ -131,6 +135,16 @@ final class ScreenshotTool: ToolModule {
             items.append(.info("　 先退出 \(rival)，或在下面的「截图快捷键」里换一个"))
         }
         items.append(ActionMenuItem("截取整个屏幕") { [weak self] in self?.captureFullScreen() })
+        let colorMenu = NSMenu()
+        let hex = ActionMenuItem("HEX，比如 #FF3B30") { Settings.colorAsHex = true }
+        hex.state = Settings.colorAsHex ? .on : .off
+        let rgb = ActionMenuItem("RGB，比如 255, 59, 48") { Settings.colorAsHex = false }
+        rgb.state = Settings.colorAsHex ? .off : .on
+        colorMenu.addItem(hex)
+        colorMenu.addItem(rgb)
+        let colorItem = NSMenuItem(title: "截图时按 C 复制颜色：\(Settings.colorAsHex ? "HEX" : "RGB")", action: nil, keyEquivalent: "")
+        colorItem.submenu = colorMenu
+        items.append(colorItem)
         let quick = ActionMenuItem("快速模式：松手直接复制，不出标注工具栏") { Settings.screenshotQuickMode.toggle() }
         quick.state = Settings.screenshotQuickMode ? .on : .off
         items.append(quick)

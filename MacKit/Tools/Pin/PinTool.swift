@@ -7,6 +7,8 @@ final class PinTool: ToolModule {
     private(set) var hotKeysRegistered = false
     private var hotKeyIDs: [UInt32] = []
     private var hidden = false
+    /// 贴图右键"识别文字"：交给识别积木（AppDelegate 里接上）
+    var onRecognize: ((CGImage) -> Void)?
 
     func activate() { registerHotKeys() }
 
@@ -81,6 +83,7 @@ final class PinTool: ToolModule {
         }
         pin.onClosed = { [weak self] closed in self?.pins.removeAll { $0 === closed } }
         pin.onCloseAll = { [weak self] in self?.closeAll() }
+        pin.onRecognize = { [weak self] image in self?.onRecognize?(image) }
         if hidden { showAll() }
         pins.append(pin)
         NSApp.unhideWithoutActivation()

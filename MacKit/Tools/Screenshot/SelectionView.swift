@@ -15,6 +15,8 @@ final class SelectionView: NSView {
     var onCancel: (() -> Void)?
     var onDone: (() -> Void)?
     var onSave: (() -> Void)?
+    /// 框选时按 C：复制鼠标指着的颜色（台阶 7）
+    var onColorPick: ((String) -> Void)?
 
     private(set) var mode: Mode = .choosing
     private(set) var editor: AnnotationEditor?
@@ -36,6 +38,20 @@ final class SelectionView: NSView {
     private let hintLabel = LabelLayer()
     private var handleLayers: [SelectionHandle: CALayer] = [:]
 
+    // 放大镜（台阶 7 取色）：鼠标附近 15×15 个像素放大 8 倍，下面写坐标和颜色
+    private static let magnifierPixels = 15
+    private static let magnifierZoom: CGFloat = 8
+    private let magnifier = CALayer()
+    private let zoomLayer = CALayer()
+    private let gridLayer = CAShapeLayer()
+    private let centerLayer = CAShapeLayer()
+    private let magnifierLabel = LabelLayer()
+    private lazy var pixels: PixelBuffer? = PixelBuffer(image: image)
+    private var shiftHeld = false
+    private var lastMouse: CGPoint?
+    /// 鼠标指着的颜色（sRGB 0–255）；自检用
+    private(set) var pointedColor: (Int, Int, Int)?
+
     private var selection: CGRect?
     private var tracking: NSTrackingArea?
 
@@ -49,7 +65,7 @@ final class SelectionView: NSView {
     private var drag: Drag = .none
 
     private static let accent = NSColor(srgbRed: 0.12, green: 0.56, blue: 1.0, alpha: 1).cgColor
-    private static let hint = "拖动框选区域　·　单击选窗口（桌面上单击 = 整屏）　·　回车确认　·　Esc 或右键取消"
+    private static let hint = "拖动框选区域　·　单击选窗口（桌面上单击 = 整屏）　·　C 复制颜色　·　Esc 或右键取消"
 
     init(frame: NSRect, image: CGImage, windowRects: [CGRect], scale: CGFloat, hint: String? = nil) {
         self.image = image
@@ -90,6 +106,7 @@ final class SelectionView: NSView {
         }
         root.addSublayer(sizeLabel)
         root.addSublayer(hintLabel)
+        setUpMagnifier(in: root)
 
         let hintSize = hintLabel.set(hint ?? Self.hint, scale: scale)
         hintLabel.frame = CGRect(x: bounds.midX - hintSize.width / 2, y: bounds.maxY - 90,
@@ -111,6 +128,104 @@ final class SelectionView: NSView {
         editor.onChange = { [weak self] in self?.updateLayers() }
         hintLabel.isHidden = true
         updateLayers()
+        updateMagnifier(at: nil)
+    }
+
+    // MARK: 放大镜、取色
+
+    private func setUpMagnifier(in root: CALayer) {
+        let side = CGFloat(Self.magnifierPixels) * Self.magnifierZoom
+        magnifier.bounds = CGRect(x: 0, y: 0, width: side, height: side)
+        magnifier.anchorPoint = .zero
+        magnifier.backgroundColor = NSColor.black.cgColor
+        magnifier.borderColor = NSColor.white.cgColor
+        magnifier.borderWidth = 2
+        magnifier.cornerRadius = 4
+        magnifier.masksToBounds = true
+        magnifier.isHidden = true
+        zoomLayer.frame = magnifier.bounds
+        zoomLayer.magnificationFilter = .nearest
+        zoomLayer.contentsGravity = .resize
+        let grid = CGMutablePath()
+        for i in 1..<Self.magnifierPixels {
+            let v = CGFloat(i) * Self.magnifierZoom
+            grid.move(to: CGPoint(x: v, y: 0)); grid.addLine(to: CGPoint(x: v, y: side))
+            grid.move(to: CGPoint(x: 0, y: v)); grid.addLine(to: CGPoint(x: side, y: v))
+        }
+        gridLayer.path = grid
+        gridLayer.strokeColor = NSColor.white.withAlphaComponent(0.12).cgColor
+        gridLayer.lineWidth = 0.5
+        gridLayer.frame = magnifier.bounds
+        let c = CGFloat(Self.magnifierPixels / 2) * Self.magnifierZoom
+        centerLayer.path = CGPath(rect: CGRect(x: c, y: c, width: Self.magnifierZoom, height: Self.magnifierZoom), transform: nil)
+        centerLayer.strokeColor = NSColor.white.cgColor
+        centerLayer.fillColor = nil
+        centerLayer.lineWidth = 1.5
+        centerLayer.frame = magnifier.bounds
+        for sub in [zoomLayer, gridLayer, centerLayer] { magnifier.addSublayer(sub) }
+        magnifier.contentsScale = scale
+        root.addSublayer(magnifier)
+        magnifierLabel.isHidden = true
+        root.addSublayer(magnifierLabel)
+    }
+
+    /// 鼠标指着的点（覆盖层坐标）→ 图片像素（左上原点）
+    private func pixelPoint(_ p: CGPoint) -> (Int, Int) {
+        let s = CGFloat(image.width) / bounds.width
+        return (Int((p.x * s).rounded(.down)), Int(((bounds.height - p.y) * s).rounded(.down)))
+    }
+
+    /// 选区状态下跟着鼠标走；编辑中、别的屏幕在编辑时收起
+    func updateMagnifier(at p: CGPoint?) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        lastMouse = p
+        guard mode == .choosing, let p, bounds.contains(p), let pixels else {
+            magnifier.isHidden = true
+            magnifierLabel.isHidden = true
+            return
+        }
+        let (px, py) = pixelPoint(p)
+        let half = Self.magnifierPixels / 2
+        let cx = min(max(px, half), image.width - half - 1), cy = min(max(py, half), image.height - half - 1)
+        zoomLayer.contents = image.cropping(to: CGRect(x: cx - half, y: cy - half,
+                                                       width: Self.magnifierPixels, height: Self.magnifierPixels))
+        let color = pixels.rgb(px, py)
+        pointedColor = color
+        let useHex = Settings.colorAsHex != shiftHeld                 // 按住 ⇧ 临时换另一种
+        let colorText = ColorText.text(color.0, color.1, color.2, hex: useHex)
+        let labelSize = magnifierLabel.set("\(Int(p.x)), \(Int(bounds.height - p.y))　\(colorText)　C 复制", scale: scale)
+        let side = magnifier.bounds.width
+        let total = CGSize(width: max(side, labelSize.width), height: side + 4 + labelSize.height)
+        let origin = MagnifierGeometry.origin(size: total, cursor: p, bounds: bounds)
+        magnifier.position = CGPoint(x: origin.x, y: origin.y + labelSize.height + 4)
+        magnifierLabel.frame = CGRect(origin: origin, size: labelSize)
+        magnifier.isHidden = false
+        magnifierLabel.isHidden = false
+    }
+
+    /// 现在指着的颜色写成文字（按住 ⇧ 时换成另一种格式）
+    var pointedColorText: String? {
+        guard let c = pointedColor else { return nil }
+        return ColorText.text(c.0, c.1, c.2, hex: Settings.colorAsHex != shiftHeld)
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        shiftHeld = event.modifierFlags.contains(.shift)
+        updateMagnifier(at: lastMouse)
+    }
+
+    /// 方向键：鼠标一次挪 1 个点
+    private func nudgeMouse(_ d: CGVector) {
+        guard let window, let p = lastMouse else { return }
+        let next = CGPoint(x: min(max(p.x + d.dx, 0), bounds.maxX - 1), y: min(max(p.y + d.dy, 0), bounds.maxY - 1))
+        let global = CGPoint(x: window.frame.minX + next.x, y: window.frame.minY + next.y)
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? window.frame.height
+        CGWarpMouseCursorPosition(CGPoint(x: global.x, y: primaryHeight - global.y))
+        selection = hoverRect(at: next)
+        updateLayers()
+        updateMagnifier(at: next)
     }
 
     /// 别的屏幕在编辑：这块只保持变暗
@@ -119,6 +234,7 @@ final class SelectionView: NSView {
         selection = nil
         hintLabel.isHidden = true
         updateLayers()
+        updateMagnifier(at: nil)
     }
 
     // MARK: 画
@@ -233,6 +349,7 @@ final class SelectionView: NSView {
     override func mouseMoved(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         if case .none = drag { cursor(at: p).set() }
+        if mode == .choosing { updateMagnifier(at: p) }
         guard mode == .choosing, case .none = drag else { return }
         selection = hoverRect(at: p)
         updateLayers()
@@ -241,6 +358,7 @@ final class SelectionView: NSView {
     override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
 
     override func mouseExited(with event: NSEvent) {
+        updateMagnifier(at: nil)
         guard mode == .choosing, case .none = drag else { return }
         selection = nil
         updateLayers()
@@ -290,6 +408,7 @@ final class SelectionView: NSView {
             hintLabel.isHidden = true
             selection = Geometry.rect(from: start, to: p)
             updateLayers()
+            updateMagnifier(at: p)
         case .resize(let handle, let original):
             setSelection(EditGeometry.resize(original, handle: handle, to: p, bounds: bounds))
         case .move(let start, let original):
@@ -336,11 +455,18 @@ final class SelectionView: NSView {
         if code == 53 { onCancel?(); return }                         // Esc
         switch mode {
         case .choosing:
+            let arrows: [Int: CGVector] = [123: CGVector(dx: -1, dy: 0), 124: CGVector(dx: 1, dy: 0),
+                                           125: CGVector(dx: 0, dy: -1), 126: CGVector(dx: 0, dy: 1)]
             if code == 36 || code == 76, let sel = selection {                    // 回车
                 pickedWindowIndex = hoverWindowIndex
                 onSelect?(sel)
+            } else if code == 8, let text = pointedColorText {                   // C：复制颜色
+                onColorPick?(text)
+            } else if let d = arrows[code] {
+                nudgeMouse(d)
+            } else {
+                super.keyDown(with: event)
             }
-            else { super.keyDown(with: event) }
         case .editing:
             guard let editor, let sel = selection else { return }
             if code == 36 || code == 76 { onDone?(); return }

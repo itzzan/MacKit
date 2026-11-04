@@ -208,5 +208,39 @@ check(RecordGeometry.cameraFrame(side: 180, target: target6, visible: vis6) == C
 check(RecordGeometry.cameraFrame(side: 180, target: vis6, visible: vis6).maxX <= vis6.maxX - 4, "摄像头画面不出屏幕")
 check(RecordGeometry.clampCameraSide(50) == 80 && RecordGeometry.clampCameraSide(500) == 400, "摄像头画面 80 到 400 点")
 
+// 台阶 7：去掉换行、颜色、找边、放大镜位置、测量文字
+check(OCRText.joinLines(["你好", "世界"]) == "你好世界", "去掉换行：中文接中文不加空格")
+check(OCRText.joinLines(["Hello", "world"]) == "Hello world", "去掉换行：英文单词之间加空格")
+check(OCRText.joinLines(["使用", "MacKit", "很好用"]) == "使用MacKit很好用", "去掉换行：中英文之间不加空格")
+check(OCRText.joinLines(["end.", "Next"]) == "end. Next", "去掉换行：英文句号后接英文加空格")
+check(OCRText.joinLines(["well-", "known"]) == "well-known" && OCRText.joinLines(["2026-", "11-04"]) == "2026-11-04",
+      "去掉换行：行尾是 - 直接接上，连字符保留")
+check(OCRText.joinLines(["  a  ", "", "b"]) == "a b", "去掉换行：空行和多余空格去掉")
+check(OCRText.url(in: " https://example.com/a ")?.host == "example.com" && OCRText.url(in: "hello") == nil
+      && OCRText.url(in: "ftp://x.com") == nil, "二维码内容是不是网址")
+check(OCRText.normalizePunctuation("let tool = ScreenshotTool（）") == "let tool = ScreenshotTool()"
+      && OCRText.normalizePunctuation("a：b，c　d") == "a:b,c d", "没有中文的行：全角标点改回半角")
+check(OCRText.normalizePunctuation("今天天气不错，去公园吧。（括号）") == "今天天气不错，去公园吧。（括号）", "有中文的行：全角标点不动")
+check(ColorText.hex(255, 59, 48) == "#FF3B30" && ColorText.rgb(255, 59, 48) == "255, 59, 48", "颜色写成 HEX / RGB")
+
+// 找边：20×10 的白图，中间一块黑（x 5…14，y 2…7）
+let edgePixel = { (x: Int, y: Int) -> (Int, Int, Int) in (5...14).contains(x) && (2...7).contains(y) ? (0, 0, 0) : (255, 255, 255) }
+let inside = EdgeFinder.distances(fromX: 8, y: 4, width: 20, height: 10, pixel: edgePixel)
+check(inside.left + inside.right + 1 == 10 && inside.up + inside.down + 1 == 6, "鼠标在黑块里 → 量出黑块宽 10、高 6")
+let beside = EdgeFinder.distances(fromX: 2, y: 4, width: 20, height: 10, pixel: edgePixel)
+check(beside.left + beside.right + 1 == 5 && beside.up + beside.down + 1 == 10, "鼠标在黑块左边 → 量到黑块的边为止")
+let nearly = EdgeFinder.distances(fromX: 1, y: 0, width: 4, height: 1, pixel: { x, _ in x == 2 ? (245, 245, 245) : (255, 255, 255) })
+check(nearly.left + nearly.right + 1 == 4, "颜色只差一点点（抗锯齿、阴影）不算边")
+
+let bigBounds = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+check(MagnifierGeometry.origin(size: CGSize(width: 120, height: 150), cursor: CGPoint(x: 100, y: 500), bounds: bigBounds)
+      == CGPoint(x: 120, y: 330), "放大镜在鼠标右下方")
+check(MagnifierGeometry.origin(size: CGSize(width: 120, height: 150), cursor: CGPoint(x: 1700, y: 500), bounds: bigBounds).x == 1560,
+      "靠右边 → 放大镜翻到左边")
+check(MagnifierGeometry.origin(size: CGSize(width: 120, height: 150), cursor: CGPoint(x: 100, y: 50), bounds: bigBounds).y == 70,
+      "靠下边 → 放大镜翻到上边")
+check(MeasureText.points(240, scale: 2) == "120" && MeasureText.points(241, scale: 2) == "120.5"
+      && MeasureText.size(widthPixels: 240, heightPixels: 96, scale: 2) == ("120 × 48", "240 × 96"), "测量结果：点和屏幕像素")
+
 print(failures == 0 ? "UNIT TESTS OK" : "UNIT TESTS FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)
