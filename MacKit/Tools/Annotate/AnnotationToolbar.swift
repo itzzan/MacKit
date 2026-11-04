@@ -1,40 +1,57 @@
 import AppKit
 
-/// 带闭包的小按钮
+/// 带闭包的小按钮（台阶 10：统一样子，鼠标放上去会亮、按下有反馈、选中是主题色底）
 @MainActor
 final class ToolbarButton: NSButton {
-    private let handler: @MainActor () -> Void
-    var isSelectedLook = false { didSet { refreshLook() } }
+    enum Style {
+        case plain        // 只有图标或文字，透明底
+        case primary      // 主按钮：主题色底（完成、开始录制、继续）
+        case danger       // 停止：红底
+        case secondary    // 次要按钮：淡淡的底（提示条里的按钮）
+    }
 
-    init(symbol: String? = nil, title: String? = nil, tip: String, size: CGFloat = 28, width: CGFloat? = nil,
-         handler: @escaping @MainActor () -> Void) {
+    private let handler: @MainActor () -> Void
+    var style: Style { didSet { refreshLook() } }
+    /// 选中的工具、打开的开关
+    var isSelectedLook = false { didSet { refreshLook() } }
+    /// 鼠标在上面（样张里也直接设）
+    var isHoveredLook = false { didSet { refreshLook() } }
+    var isPressedLook = false { didSet { refreshLook() } }
+    private var tracking: NSTrackingArea?
+    private var widthConstraint: NSLayoutConstraint?
+    private let fixedWidth: CGFloat?
+    private let hasSymbol: Bool
+    private var titleText: String?
+
+    init(symbol: String? = nil, title: String? = nil, tip: String, size: CGFloat = Theme.buttonSize, width: CGFloat? = nil,
+         style: Style = .plain, handler: @escaping @MainActor () -> Void) {
         self.handler = handler
+        self.style = style
+        fixedWidth = width
+        hasSymbol = symbol != nil
+        titleText = title
         super.init(frame: CGRect(x: 0, y: 0, width: width ?? size, height: size))
-        if let symbol, let image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip) {
-            self.image = image.withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
-            imagePosition = .imageOnly
-        }
-        if let title {
-            self.attributedTitle = NSAttributedString(string: title, attributes: [
-                .font: NSFont.systemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor.white])
-        }
         toolTip = tip
         isBordered = false
-        contentTintColor = .white
+        if title == nil { self.title = "" }
+        (cell as? NSButtonCell)?.highlightsBy = []          // 按下的样子自己画
         refusesFirstResponder = true
         target = self
         action = #selector(fire)
         wantsLayer = true
-        layer?.cornerRadius = 6
+        layer?.cornerRadius = Theme.buttonRadius
         translatesAutoresizingMaskIntoConstraints = false
-        widthAnchor.constraint(equalToConstant: width ?? size).isActive = true
         heightAnchor.constraint(equalToConstant: size).isActive = true
-        if let symbol, let title, let image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip) {
-            self.image = image.withSymbolConfiguration(.init(pointSize: 13, weight: .semibold))
-            imagePosition = .imageLeading
-            self.attributedTitle = NSAttributedString(string: " " + title, attributes: [
-                .font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: NSColor.white])
+        if let symbol, let image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip) {
+            self.image = image.withSymbolConfiguration(.init(pointSize: title == nil ? 14 : 12, weight: title == nil ? .medium : .semibold))
+            imagePosition = title == nil ? .imageOnly : .imageLeading
+            imageHugsTitle = true                              // 图标紧挨着文字，一起居中
         }
+        applyTitle()
+        let w = widthConstraint(for: size)
+        w.isActive = true
+        widthConstraint = w
+        refreshLook()
     }
 
     required init?(coder: NSCoder) { fatalError("not supported") }
@@ -42,18 +59,79 @@ final class ToolbarButton: NSButton {
     @MainActor @objc private func fire() { handler() }
 
     func setTitle(_ title: String) {
-        attributedTitle = NSAttributedString(string: " " + title, attributes: [
-            .font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: NSColor.white])
+        titleText = title
+        applyTitle()
+        if fixedWidth == nil { widthConstraint?.constant = autoWidth() }
     }
 
     func setSymbol(_ symbol: String, tip: String) {
         image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)?
-            .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
+            .withSymbolConfiguration(.init(pointSize: titleText == nil ? 14 : 12, weight: titleText == nil ? .medium : .semibold))
         toolTip = tip
     }
 
+    override var contentTintColor: NSColor? {
+        didSet { applyTitle() }
+    }
+
+    private func applyTitle() {
+        guard let titleText else { return }
+        let color = contentTintColor ?? Theme.text
+        attributedTitle = NSAttributedString(string: (hasSymbol ? " " : "") + titleText, attributes: [
+            .font: NSFont.systemFont(ofSize: Theme.bodySize, weight: .semibold), .foregroundColor: color])
+    }
+
+    /// 带文字的按钮没给宽度时：按文字长短自己算
+    private func autoWidth() -> CGFloat {
+        guard let titleText else { return Theme.buttonSize }
+        let text = ((hasSymbol ? " " : "") + titleText) as NSString
+        let w = text.size(withAttributes: [.font: NSFont.systemFont(ofSize: Theme.bodySize, weight: .semibold)]).width
+        return ceil(w + (hasSymbol ? 16 : 0) + 20)
+    }
+
+    private func widthConstraint(for size: CGFloat) -> NSLayoutConstraint {
+        widthAnchor.constraint(equalToConstant: fixedWidth ?? (titleText == nil ? size : autoWidth()))
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHoveredLook = true }
+    override func mouseExited(with event: NSEvent) { isHoveredLook = false }
+
+    override func highlight(_ flag: Bool) {
+        super.highlight(flag)
+        isPressedLook = flag
+    }
+
+    override var isEnabled: Bool {
+        didSet { alphaValue = isEnabled ? 1 : 0.35 }
+    }
+
+    /// 底色：选中 / 主按钮 / 停止 / 次要 / 普通，再叠上鼠标放上去、按下去的变化
+    var fillColor: NSColor? {
+        switch style {
+        case .primary: return isPressedLook ? Theme.accentPressed : isHoveredLook ? Theme.accent.blended(withFraction: 0.12, of: .white) : Theme.accent
+        case .danger: return isPressedLook ? Theme.recordPressed : isHoveredLook ? Theme.record.blended(withFraction: 0.12, of: .white) : Theme.record
+        case .secondary: return isPressedLook ? Theme.pressedFill.withAlphaComponent(0.3) : isHoveredLook ? Theme.pressedFill : Theme.secondaryFill
+        case .plain:
+            if isSelectedLook { return isPressedLook ? Theme.accentPressed : Theme.accent }
+            return isPressedLook ? Theme.pressedFill : isHoveredLook ? Theme.hoverFill : nil
+        }
+    }
+
     private func refreshLook() {
-        layer?.backgroundColor = isSelectedLook ? NSColor.white.withAlphaComponent(0.28).cgColor : nil
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer?.backgroundColor = fillColor?.cgColor
+        CATransaction.commit()
+        if contentTintColor == nil || contentTintColor == Theme.text { contentTintColor = Theme.text }
     }
 }
 
@@ -77,7 +155,7 @@ final class ColorSwatch: NSButton {
         wantsLayer = true
         layer?.backgroundColor = color.cgColor
         layer?.cornerRadius = 10
-        layer?.borderColor = NSColor.white.cgColor
+        layer?.borderColor = NSColor.white.withAlphaComponent(0.9).cgColor
         layer?.borderWidth = 1
         translatesAutoresizingMaskIntoConstraints = false
         widthAnchor.constraint(equalToConstant: 20).isActive = true
@@ -125,14 +203,7 @@ final class AnnotationToolbar: NSView {
         super.init(frame: .zero)
         wantsLayer = true
 
-        let background = NSVisualEffectView()
-        background.material = .hudWindow
-        background.blendingMode = standalone ? .behindWindow : .withinWindow
-        background.state = .active
-        background.appearance = NSAppearance(named: .darkAqua)
-        background.wantsLayer = true
-        background.layer?.cornerRadius = 9
-        background.layer?.masksToBounds = true
+        let background = Theme.surface(withinWindow: !standalone)
         background.translatesAutoresizingMaskIntoConstraints = false
         addSubview(background)
 
@@ -157,10 +228,10 @@ final class AnnotationToolbar: NSView {
         let cancel = ToolbarButton(symbol: "xmark", tip: mode == .pin ? "放弃这次画的（Esc）" : "取消（Esc）") { [weak self] in
             self?.onCancel?()
         }
-        let done = ToolbarButton(symbol: "checkmark", tip: mode == .pin ? "完成标注（回车）" : "完成：复制并保存（回车）") { [weak self] in
+        let done = ToolbarButton(symbol: "checkmark", tip: mode == .pin ? "完成标注（回车）" : "完成：复制并保存（回车）",
+                                 style: .primary) { [weak self] in
             self?.onDone?()
         }
-        done.contentTintColor = NSColor(srgbRed: 0.35, green: 0.85, blue: 0.45, alpha: 1)
 
         let actions: [NSView] = mode == .pin ? [cancel, done] : [recognize, longShot, pin, save, cancel, done]
         hasPinAndSave = mode == .screenshot
@@ -204,15 +275,7 @@ final class AnnotationToolbar: NSView {
 
     required init?(coder: NSCoder) { fatalError("not supported") }
 
-    private static func divider() -> NSView {
-        let v = NSView()
-        v.wantsLayer = true
-        v.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.25).cgColor
-        v.translatesAutoresizingMaskIntoConstraints = false
-        v.widthAnchor.constraint(equalToConstant: 1).isActive = true
-        v.heightAnchor.constraint(equalToConstant: 18).isActive = true
-        return v
-    }
+    private static func divider() -> NSView { Theme.dividerView() }
 
     func update(tool: AnnotationTool?, color: AnnotationColor, size: AnnotationSize, canUndo: Bool, canRedo: Bool) {
         for (t, button) in toolButtons { button.isSelectedLook = t == tool }

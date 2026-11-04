@@ -14,6 +14,7 @@ scripts/install.sh              # 编译、装到 ~/Applications 并启动
 scripts/install.sh --no-open    # 只装不启动
 scripts/smoke-record.sh         # 录屏实录检查：真的录几小段、拼接、转 GIF 再删掉（会短暂出现系统的录屏标志）
 scripts/smoke-longshot.sh       # 长截图实录检查：真的拍屏幕左上角一小块 1.5 秒，看尺寸、量拼接速度（会短暂出现系统的录屏标志）
+build/MacKit.app/Contents/MacOS/MacKit --style-preview 输出.png 标题 [左边一栏.png]   # 样张：把各个浮动条、按钮画进一张图（不弹窗口）
 MACKIT_BUILDER=swiftc scripts/build.sh   # 装了 Xcode 也强制用命令行编译
 ```
 
@@ -31,8 +32,8 @@ xcodegen generate
 
 ```
 MacKit/
-  App/            程序入口、自检
-  Core/           公共积木：快捷键、设置、权限、提示条、菜单、截图记录
+  App/            程序入口、自检、样张
+  Core/           公共积木：快捷键、设置、权限、提示条、菜单、截图记录、统一样子（Theme）
   Tools/
     Screenshot/   截图：冻屏、选区覆盖层、坐标换算、复制和保存
     Pin/          贴图：贴图窗口、缩放透明度、读剪贴板、文字卡片、贴图上标注

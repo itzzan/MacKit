@@ -64,7 +64,7 @@ final class SelectionView: NSView {
     }
     private var drag: Drag = .none
 
-    private static let accent = NSColor(srgbRed: 0.12, green: 0.56, blue: 1.0, alpha: 1).cgColor
+    private static let accent = Theme.accent.cgColor
     private static let hint = "拖动框选区域　·　单击选窗口（桌面上单击 = 整屏）　·　C 复制颜色　·　Esc 或右键取消"
 
     init(frame: NSRect, image: CGImage, windowRects: [CGRect], scale: CGFloat, hint: String? = nil) {
@@ -140,7 +140,7 @@ final class SelectionView: NSView {
         magnifier.backgroundColor = NSColor.black.cgColor
         magnifier.borderColor = NSColor.white.cgColor
         magnifier.borderWidth = 2
-        magnifier.cornerRadius = 4
+        magnifier.cornerRadius = Theme.labelRadius
         magnifier.masksToBounds = true
         magnifier.isHidden = true
         zoomLayer.frame = magnifier.bounds

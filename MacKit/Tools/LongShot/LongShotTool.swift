@@ -30,7 +30,8 @@ final class LongShotSession {
         self.region = region
         let screen = NSScreen.screens.first { $0.displayID == region.displayID }
         scale = screen?.backingScaleFactor ?? 2
-        border = RecordingBorderWindow(region: region.globalRect, screenFrame: region.screenFrame, adjustable: false)
+        border = RecordingBorderWindow(region: region.globalRect, screenFrame: region.screenFrame, adjustable: false,
+                                       color: Theme.accent)
         let visible = screen?.visibleFrame ?? region.screenFrame
         preview = LongShotPreview(frame: LongShotGeometry.previewFrame(region: region.globalRect, visible: visible,
                                                                       width: LongShotPreview.width))

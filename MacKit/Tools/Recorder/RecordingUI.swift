@@ -57,55 +57,39 @@ final class RecordingControlBar {
         clicksButton = ToolbarButton(symbol: "cursorarrow.click.2", tip: "") { [weak self] in self?.toggleClicks() }
         keysButton = ToolbarButton(symbol: "keyboard", tip: "") { [weak self] in self?.toggleKeys() }
         cameraButton = ToolbarButton(symbol: "video.slash", tip: "") { [weak self] in self?.toggleCamera() }
-        stopTimerButton = ToolbarButton(symbol: "timer", title: "不限时", tip: "录多久自动停", width: 112) { [weak self] in
+        stopTimerButton = ToolbarButton(symbol: "timer", title: "不限时", tip: "录多久自动停", width: 104) { [weak self] in
             self?.showStopTimerMenu()
         }
-        startTimeButton = ToolbarButton(symbol: "alarm", title: "立即开始", tip: "几点开始录", width: 132) { [weak self] in
+        startTimeButton = ToolbarButton(symbol: "alarm", title: "立即开始", tip: "几点开始录", width: 120) { [weak self] in
             self?.showStartTimeMenu()
         }
-        let start = ToolbarButton(symbol: "record.circle.fill", title: "开始录制", tip: "开始录制（⌘4）", width: 104) { [weak self] in
+        let start = ToolbarButton(symbol: "circle.fill", title: "开始录制", tip: "开始录制（⌘4）", style: .primary) { [weak self] in
             self?.onStart?()
         }
-        start.contentTintColor = .systemRed
         let cancel = ToolbarButton(symbol: "xmark", tip: "不录了") { [weak self] in self?.onCancel?() }
         buttons = [audioButton, micButton, clicksButton, keysButton, cameraButton, stopTimerButton, startTimeButton, start, cancel]
 
         let row = NSStackView(views: buttons)
         row.orientation = .horizontal
         row.spacing = 4
-        hint.font = .systemFont(ofSize: 11)
-        hint.textColor = NSColor.systemYellow
+        hint.font = Theme.small()
+        hint.textColor = Theme.warning
         stack = NSStackView(views: [row, hint])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 2
         stack.detachesHiddenViews = true
-        stack.edgeInsets = NSEdgeInsets(top: 5, left: 8, bottom: 5, right: 8)
-        panel.contentView = Self.hudBackground(containing: stack, cornerRadius: 9)
+        stack.edgeInsets = Theme.barInsets
+        panel.contentView = Theme.bar(containing: stack)
         refresh()
     }
 
     /// 录窗口时开了按键或摄像头：提示录不进去
     var showsWindowHint: Bool { !hint.isHidden }
 
-    static func hudBackground(containing row: NSView, cornerRadius: CGFloat) -> NSView {
-        let background = NSVisualEffectView()
-        background.material = .hudWindow
-        background.blendingMode = .behindWindow
-        background.state = .active
-        background.appearance = NSAppearance(named: .darkAqua)
-        background.wantsLayer = true
-        background.layer?.cornerRadius = cornerRadius
-        background.layer?.masksToBounds = true
-        row.translatesAutoresizingMaskIntoConstraints = false
-        background.addSubview(row)
-        NSLayoutConstraint.activate([
-            row.leadingAnchor.constraint(equalTo: background.leadingAnchor),
-            row.trailingAnchor.constraint(equalTo: background.trailingAnchor),
-            row.topAnchor.constraint(equalTo: background.topAnchor),
-            row.bottomAnchor.constraint(equalTo: background.bottomAnchor),
-        ])
-        return background
+    /// 台阶 10 起统一用 Theme.bar；留着这个名字给老代码
+    static func hudBackground(containing row: NSView, cornerRadius: CGFloat = Theme.barRadius) -> NSView {
+        Theme.bar(containing: row, radius: cornerRadius)
     }
 
     private func toggleAudio() { systemAudio.toggle(); Settings.recordSystemAudio = systemAudio; refresh() }
@@ -228,7 +212,7 @@ final class TimePickerPanel: NSObject, NSWindowDelegate {
         ok.keyEquivalent = "\r"
         let cancel = NSButton(title: "取消", target: self, action: #selector(dismiss))
         let hint = NSTextField(labelWithString: "今天这个时间已经过了，就算明天")
-        hint.font = .systemFont(ofSize: 11)
+        hint.font = Theme.small()
         hint.textColor = .secondaryLabelColor
         let buttons = NSStackView(views: [cancel, ok])
         let stack = NSStackView(views: [picker, hint, buttons])
@@ -285,19 +269,17 @@ final class CountdownWindow {
         panel.canHide = false
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        let bg = NSView(frame: CGRect(origin: .zero, size: size))
-        bg.wantsLayer = true
-        bg.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.55).cgColor
-        bg.layer?.cornerRadius = 70
-        label.font = .monospacedDigitSystemFont(ofSize: 72, weight: .bold)
+        let bg = Theme.surface(radius: size.width / 2)
+        bg.frame = CGRect(origin: .zero, size: size)
+        label.font = Theme.number(72, .bold)
         label.textColor = .white
         label.alignment = .center
         label.frame = CGRect(x: 0, y: 24, width: size.width, height: 92)
         bg.addSubview(label)
         if let hint {
             let small = NSTextField(labelWithString: hint)
-            small.font = .systemFont(ofSize: 11, weight: .medium)
-            small.textColor = NSColor.white.withAlphaComponent(0.85)
+            small.font = Theme.small(.medium)
+            small.textColor = Theme.secondaryText
             small.alignment = .center
             small.frame = CGRect(x: 0, y: 18, width: size.width, height: 16)
             bg.addSubview(small)
@@ -329,7 +311,8 @@ final class RecordingBorderWindow {
     private enum Drag { case resize(SelectionHandle, CGRect), move(CGPoint, CGRect) }
     private var drag: Drag?
 
-    init(region: CGRect, screenFrame: CGRect, adjustable: Bool = true) {
+    /// color：录屏是红色；长截图不是录制，用主题色
+    init(region: CGRect, screenFrame: CGRect, adjustable: Bool = true, color: NSColor = Theme.record) {
         self.region = region
         self.screenFrame = screenFrame
         self.adjustable = adjustable
@@ -346,6 +329,7 @@ final class RecordingBorderWindow {
         panel.acceptsMouseMovedEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         view = RecordingBorderView(frame: CGRect(origin: .zero, size: frame.size))
+        view.color = color
         view.autoresizingMask = [.width, .height]
         panel.contentView = view
         view.owner = self
@@ -460,6 +444,7 @@ final class RecordingBorderView: NSView {
     var adjustable = true
     var scale: CGFloat = 2
     var regionSize: CGSize = .zero
+    var color: NSColor = Theme.record
     private var tracking: NSTrackingArea?
 
     override var isFlipped: Bool { false }
@@ -470,7 +455,7 @@ final class RecordingBorderView: NSView {
         let m = RecordingBorderWindow.margin
         let r = bounds.insetBy(dx: m, dy: m)
         // 虚线画在区域外面一点，不会被录进去
-        ctx.setStrokeColor(NSColor.systemRed.cgColor)
+        ctx.setStrokeColor(color.cgColor)
         ctx.setLineWidth(2)
         ctx.setLineDash(phase: 0, lengths: [8, 5])
         ctx.stroke(r.insetBy(dx: -3, dy: -3))
@@ -481,18 +466,17 @@ final class RecordingBorderView: NSView {
             let dot = CGRect(x: c.x - 4.5, y: c.y - 4.5, width: 9, height: 9)
             ctx.setFillColor(NSColor.white.cgColor)
             ctx.fill(dot)
-            ctx.setStrokeColor(NSColor.systemRed.cgColor)
+            ctx.setStrokeColor(color.cgColor)
             ctx.setLineWidth(1.5)
             ctx.stroke(dot)
         }
         let text = "\(Int(regionSize.width * scale)) × \(Int(regionSize.height * scale))　拖小方块改大小，拖虚线挪位置"
-        let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11, weight: .medium),
-                                                    .foregroundColor: NSColor.white]
+        let attrs: [NSAttributedString.Key: Any] = [.font: Theme.small(.medium), .foregroundColor: Theme.text]
         let size = (text as NSString).size(withAttributes: attrs)
         guard size.width + 16 < r.width, size.height + 12 < r.height else { return }
         let box = CGRect(x: r.minX + 6, y: r.maxY - size.height - 10, width: size.width + 10, height: size.height + 4)
-        ctx.setFillColor(NSColor.black.withAlphaComponent(0.6).cgColor)
-        ctx.addPath(CGPath(roundedRect: box, cornerWidth: 4, cornerHeight: 4, transform: nil))
+        ctx.setFillColor(Theme.solidFill.cgColor)
+        ctx.addPath(CGPath(roundedRect: box, cornerWidth: Theme.labelRadius, cornerHeight: Theme.labelRadius, transform: nil))
         ctx.fillPath()
         (text as NSString).draw(at: CGPoint(x: box.minX + 5, y: box.minY + 2), withAttributes: attrs)
     }
@@ -538,6 +522,7 @@ final class RecordingHUD {
     let panel: NSPanel
     private(set) var mode: Mode = .recording
     private let timeLabel = NSTextField(labelWithString: "00:00")
+    private let stateLabel = NSTextField(labelWithString: "")
     private let dot = NSView()
     private let systemAudio: Bool
     private let microphone: Bool
@@ -560,28 +545,31 @@ final class RecordingHUD {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
 
         dot.wantsLayer = true
-        dot.layer?.cornerRadius = 6
+        dot.layer?.cornerRadius = 5
         dot.translatesAutoresizingMaskIntoConstraints = false
-        dot.widthAnchor.constraint(equalToConstant: 12).isActive = true
-        dot.heightAnchor.constraint(equalToConstant: 12).isActive = true
-        timeLabel.font = .monospacedDigitSystemFont(ofSize: 14, weight: .semibold)
-        timeLabel.textColor = .white
+        dot.widthAnchor.constraint(equalToConstant: 10).isActive = true
+        dot.heightAnchor.constraint(equalToConstant: 10).isActive = true
+        timeLabel.font = Theme.number(15)
+        timeLabel.textColor = Theme.text
+        stateLabel.font = Theme.small(.medium)
+        stateLabel.textColor = Theme.secondaryText
 
-        let make = { (key: String, symbol: String, title: String, tip: String, width: CGFloat, run: @escaping @MainActor () -> Void) in
-            let b = ToolbarButton(symbol: symbol, title: title, tip: tip, width: width, handler: run)
-            b.contentTintColor = .white
-            self.buttons[key] = b
+        let make = { (key: String, symbol: String, title: String, tip: String, style: ToolbarButton.Style,
+                      run: @escaping @MainActor () -> Void) in
+            self.buttons[key] = ToolbarButton(symbol: symbol, title: title, tip: tip, style: style, handler: run)
         }
-        make("pause", "pause.fill", "暂停", "暂停（暂停期间不录）", 70) { [weak self] in self?.onPause?() }
-        make("resume", "play.fill", "继续", "继续录", 70) { [weak self] in self?.onResume?() }
-        make("stop", "stop.fill", "停止", "停止录制（⌘4）", 70) { [weak self] in self?.onStop?() }
-        make("startNow", "play.fill", "现在开始", "不等了，现在开始（⌘4）", 96) { [weak self] in self?.onStartNow?() }
-        make("cancel", "xmark", "取消", "取消这次录屏", 70) { [weak self] in self?.onCancel?() }
+        make("pause", "pause.fill", "暂停", "暂停（暂停期间不录）", .plain) { [weak self] in self?.onPause?() }
+        make("resume", "play.fill", "继续", "继续录", .primary) { [weak self] in self?.onResume?() }
+        make("stop", "stop.fill", "停止", "停止录制（⌘4）", .danger) { [weak self] in self?.onStop?() }
+        make("startNow", "play.fill", "现在开始", "不等了，现在开始（⌘4）", .primary) { [weak self] in self?.onStartNow?() }
+        make("cancel", "xmark", "取消", "取消这次录屏", .plain) { [weak self] in self?.onCancel?() }
         setMode(.recording)
     }
 
     var timeText: String { timeLabel.stringValue }
     var windowNumber: CGWindowID { CGWindowID(panel.windowNumber) }
+    /// 红点有没有在闪（自检用）
+    var isPulsing: Bool { dot.layer?.animation(forKey: "pulse") != nil }
 
     func update(_ text: String) { timeLabel.stringValue = text }
 
@@ -593,45 +581,44 @@ final class RecordingHUD {
         switch newMode {
         case .waiting:
             let icon = NSImageView(image: NSImage(systemSymbolName: "alarm", accessibilityDescription: "等着开始") ?? NSImage())
-            icon.contentTintColor = .white
+            icon.contentTintColor = Theme.text
             views = [icon, timeLabel, buttons["startNow"]!, buttons["cancel"]!]
         case .recording:
-            dot.layer?.backgroundColor = NSColor.systemRed.cgColor
+            dot.layer?.backgroundColor = Theme.record.cgColor
+            // 红点慢慢"呼吸"，一眼看出正在录（这个小条本身不会被录进去）
             let pulse = CABasicAnimation(keyPath: "opacity")
             pulse.fromValue = 1
             pulse.toValue = 0.25
-            pulse.duration = 0.8
+            pulse.duration = 0.9
             pulse.autoreverses = true
             pulse.repeatCount = .infinity
+            pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             dot.layer?.add(pulse, forKey: "pulse")
             views = [dot, timeLabel]
             for (on, symbol, tip) in [(systemAudio, "speaker.wave.2.fill", "在录系统声音"), (microphone, "mic.fill", "在录麦克风")] where on {
                 let icon = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: tip) ?? NSImage())
-                icon.contentTintColor = NSColor.white.withAlphaComponent(0.75)
+                icon.contentTintColor = Theme.secondaryText
                 icon.toolTip = tip
                 views.append(icon)
             }
-            views += [buttons["pause"]!, buttons["stop"]!]
+            views += [Theme.dividerView(), buttons["pause"]!, buttons["stop"]!]
         case .paused:
             dot.layer?.backgroundColor = NSColor.systemGray.cgColor
-            views = [dot, timeLabel, buttons["resume"]!, buttons["stop"]!]
+            stateLabel.stringValue = "已暂停"
+            views = [dot, stateLabel, timeLabel, Theme.dividerView(), buttons["resume"]!, buttons["stop"]!]
         case .saving:
             dot.layer?.backgroundColor = NSColor.systemGray.cgColor
-            views = [dot, timeLabel]
+            stateLabel.stringValue = "保存中"
+            views = [dot, stateLabel, timeLabel]
         }
-        let row = NSStackView(views: views)
-        row.orientation = .horizontal
-        row.spacing = 8
-        row.edgeInsets = NSEdgeInsets(top: 4, left: 12, bottom: 4, right: 6)
-        let background = RecordingControlBar.hudBackground(containing: row, cornerRadius: 18)
-        background.layer?.borderWidth = 1
-        background.layer?.borderColor = (newMode == .recording ? NSColor.systemRed : NSColor.systemGray)
-            .withAlphaComponent(0.6).cgColor
+        let row = Theme.row(views, spacing: 8, insets: NSEdgeInsets(top: 5, left: 14, bottom: 5, right: 6))
+        let background = Theme.bar(containing: row)
+        if newMode == .recording { background.layer?.borderColor = Theme.record.withAlphaComponent(0.55).cgColor }
         let rightEdge = panel.frame.maxX
         let wasShown = panel.frame.width > 0
         panel.contentView = background
         let fit = row.fittingSize
-        panel.setContentSize(CGSize(width: fit.width, height: max(fit.height, 36)))
+        panel.setContentSize(CGSize(width: fit.width, height: max(fit.height, 38)))
         if wasShown { panel.setFrameOrigin(CGPoint(x: rightEdge - panel.frame.width, y: panel.frame.minY)) }
     }
 

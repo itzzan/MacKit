@@ -219,7 +219,7 @@ final class PinView: NSView {
     private let backingScale: CGFloat
     private var badgeGeneration = 0
 
-    private static let accent = NSColor(srgbRed: 0.12, green: 0.56, blue: 1.0, alpha: 1).cgColor
+    private static let accent = Theme.accent.cgColor
     private static let idleBorder = NSColor(white: 0.5, alpha: 0.6).cgColor
 
     init(frame: NSRect, image: CGImage, backingScale: CGFloat) {
@@ -266,7 +266,7 @@ final class PinView: NSView {
     func setClickThroughLook(_ on: Bool) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        borderLayer.borderColor = on ? NSColor.systemOrange.cgColor : Self.idleBorder
+        borderLayer.borderColor = on ? Theme.warning.cgColor : Self.idleBorder      // 穿透中：黄色提醒
         CATransaction.commit()
     }
 

@@ -45,6 +45,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             RecordSmokeTest.run(resultPath: CommandLine.arguments[i + 1])
             return
         }
+        if CommandLine.arguments.contains("--style-preview") {
+            StylePreview.run(arguments: CommandLine.arguments)
+            return
+        }
         if let i = CommandLine.arguments.firstIndex(of: "--longshot-smoke"), CommandLine.arguments.indices.contains(i + 1) {
             LongShotSmokeTest.run(resultPath: CommandLine.arguments[i + 1])
             return

@@ -7,8 +7,10 @@ final class LabelLayer: CALayer {
 
     override init() {
         super.init()
-        backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
-        cornerRadius = 4
+        backgroundColor = Theme.solidFill.cgColor
+        cornerRadius = Theme.labelRadius
+        borderWidth = 0.5
+        borderColor = Theme.border.cgColor
         text.font = Self.font
         text.fontSize = 12
         text.foregroundColor = NSColor.white.cgColor

@@ -49,6 +49,7 @@ enum SelfTest {
         testRecognize()
         testLongShot(menu: statusItem.menu)
         testMisc(menu: statusItem.menu, recorder: recorder)
+        testTheme()
 
         print(failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED (\(failures))")
         exit(failures == 0 ? 0 : 1)
@@ -1355,6 +1356,74 @@ enum SelfTest {
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         check(stoppedFired == 0 && stoppedCancelled == 1, "延时截图：倒数时按 Esc → 取消，不截")
         check(CountdownWindow(center: .zero, hint: "Esc 取消").panel.contentView?.subviews.count == 2, "倒数的数字下面写着\u{201C}Esc 取消\u{201D}")
+    }
+
+    // MARK: 台阶 10 统一样子
+
+    private static func testTheme() {
+        // 按钮：几种样子的底色
+        let plain = ToolbarButton(symbol: "rectangle", tip: "") {}
+        check(plain.fillColor == nil, "普通按钮：透明底")
+        plain.isHoveredLook = true
+        check(plain.fillColor == Theme.hoverFill, "鼠标放上去：亮一下")
+        plain.isPressedLook = true
+        check(plain.fillColor == Theme.pressedFill, "按下去：再亮一点")
+        plain.isPressedLook = false
+        plain.isHoveredLook = false
+        plain.isSelectedLook = true
+        check(plain.fillColor == Theme.accent, "选中的工具：主题色底")
+        let primary = ToolbarButton(symbol: "checkmark", tip: "", style: .primary) {}
+        let danger = ToolbarButton(symbol: "stop.fill", title: "停止", tip: "", style: .danger) {}
+        check(primary.fillColor == Theme.accent && danger.fillColor == Theme.record, "主按钮是主题色、停止是红色")
+        let titled = ToolbarButton(symbol: "play.fill", title: "现在开始", tip: "") {}
+        func fixed(_ b: NSButton, _ attribute: NSLayoutConstraint.Attribute) -> CGFloat? {
+            b.constraints.first { $0.firstAttribute == attribute && $0.secondItem == nil && $0.isActive }?.constant
+        }
+        check((fixed(titled, .width) ?? 0) > 80 && fixed(plain, .width) == Theme.buttonSize
+              && fixed(titled, .height) == Theme.buttonSize && fixed(plain, .height) == Theme.buttonSize,
+              "带字的按钮按字的长短定宽，所有按钮一样高（\(Int(Theme.buttonSize)) 点）")
+
+        // 浮动条都用统一底板：圆角、细边框
+        func usesTheme(_ view: NSView?, radius: CGFloat = Theme.barRadius) -> Bool {
+            guard let layer = view?.layer else { return false }
+            return layer.cornerRadius == radius && layer.borderWidth == 1 && layer.masksToBounds
+        }
+        let toolbar = AnnotationToolbar(mode: .screenshot)
+        check(usesTheme(toolbar.subviews.first), "截图工具栏用统一底板")
+        check(usesTheme(RecordingControlBar(systemAudio: true, microphone: false).panel.contentView), "录屏控制条用统一底板")
+        check(usesTheme(LongShotControlBar().panel.contentView), "长截图控制条用统一底板")
+        check(usesTheme(KeyCastWindow().panel.contentView, radius: 12), "按键牌子用统一底板")
+        check(usesTheme(CountdownWindow(center: .zero).panel.contentView, radius: 70), "倒数用统一底板（圆的）")
+        check(usesTheme(Toast.makePanel("✓ 好了").contentView?.subviews.first)
+              && usesTheme(Toast.makeActionsPanel("好了", actions: [("打开", {})]).contentView), "提示条、带按钮的提示条用统一底板")
+
+        // 录制小条
+        let hud = RecordingHUD(systemAudio: true, microphone: false)
+        check(hud.isPulsing && usesTheme(hud.panel.contentView) && hud.buttons["stop"]?.style == .danger
+              && hud.buttons["pause"]?.style == .plain, "录制小条：红点在呼吸，停止是红色按钮")
+        hud.setMode(.paused)
+        let pausedTexts = (hud.panel.contentView?.subviews.first as? NSStackView)?.arrangedSubviews
+            .compactMap { ($0 as? NSTextField)?.stringValue } ?? []
+        check(!hud.isPulsing && pausedTexts.contains("已暂停") && hud.buttons["resume"]?.style == .primary,
+              "暂停时红点不闪、写着\u{201C}已暂停\u{201D}，继续是主按钮")
+
+        // 提示条：看文字配图标
+        check(Toast.kind(of: "✓ 已复制到剪贴板") == (.success, "已复制到剪贴板") && Toast.kind(of: "截图失败：图片编码出错").0 == .failure
+              && Toast.kind(of: "长截图失败：…").0 == .failure && Toast.kind(of: "已取消延时截图").0 == .info,
+              "提示条：✓ 开头配绿勾，失败配黄色感叹号，别的不配图标")
+        let successRow = Toast.content("✓ 好了")
+        check(successRow.count == 2 && (successRow.first as? NSImageView)?.contentTintColor == Theme.success
+              && (successRow.last as? NSTextField)?.stringValue == "好了", "成功提示：绿勾 + 去掉 ✓ 的文字")
+
+        // 颜色各归各位
+        let longShotBorder = RecordingBorderWindow(region: CGRect(x: 100, y: 100, width: 300, height: 200),
+                                                   screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+                                                   adjustable: false, color: Theme.accent)
+        let recordBorder = RecordingBorderWindow(region: CGRect(x: 100, y: 100, width: 300, height: 200),
+                                                 screenFrame: CGRect(x: 0, y: 0, width: 1728, height: 1117))
+        check((longShotBorder.panel.contentView as? RecordingBorderView)?.color == Theme.accent
+              && (recordBorder.panel.contentView as? RecordingBorderView)?.color == Theme.record,
+              "长截图的框是主题色，录屏的框是红色")
     }
 
     private static func findButton(in view: NSView, where match: (NSButton) -> Bool) -> NSButton? {

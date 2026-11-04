@@ -40,9 +40,9 @@ final class MeasureView: NSView {
             shape.fillColor = nil
             shape.lineWidth = 1
         }
-        lines.strokeColor = NSColor.systemPink.cgColor
-        box.strokeColor = NSColor.systemPink.cgColor
-        box.fillColor = NSColor.systemPink.withAlphaComponent(0.12).cgColor
+        lines.strokeColor = Theme.accent.cgColor
+        box.strokeColor = Theme.accent.cgColor
+        box.fillColor = Theme.accent.withAlphaComponent(0.12).cgColor
         for sub in [imageLayer, lines, box, widthLabel, heightLabel, infoLabel] as [CALayer] { root.addSublayer(sub) }
         for l in [widthLabel, heightLabel, infoLabel] { l.isHidden = true }
     }

@@ -23,12 +23,9 @@ final class KeyCastWindow {
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         label.font = .systemFont(ofSize: 22, weight: .semibold)
-        label.textColor = .white
+        label.textColor = Theme.text
         label.alignment = .center
-        let bg = NSView()
-        bg.wantsLayer = true
-        bg.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
-        bg.layer?.cornerRadius = 10
+        let bg = Theme.surface(radius: 12)
         label.translatesAutoresizingMaskIntoConstraints = false
         bg.addSubview(label)
         NSLayoutConstraint.activate([

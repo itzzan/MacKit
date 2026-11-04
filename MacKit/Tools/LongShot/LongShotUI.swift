@@ -27,31 +27,28 @@ final class LongShotControlBar {
         panel.animationBehavior = .none
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
 
-        label.font = .systemFont(ofSize: 12, weight: .medium)
-        label.textColor = .white
+        label.font = Theme.body()
+        label.textColor = Theme.text
         label.lineBreakMode = .byTruncatingTail
         label.translatesAutoresizingMaskIntoConstraints = false
         label.widthAnchor.constraint(equalToConstant: 330).isActive = true
         autoButton = ToolbarButton(symbol: "arrow.down.circle", title: "自动滚动", tip: "MacKit 替你往下滚，到底自动停",
-                                   width: 104) { [weak self] in self?.onAuto?() }
+                                   width: 108) { [weak self] in self?.onAuto?() }
         let cancel = ToolbarButton(symbol: "xmark", tip: "取消（Esc）") { [weak self] in self?.onCancel?() }
-        doneButton = ToolbarButton(symbol: "checkmark", title: "完成", tip: "完成：复制并保存（回车）", width: 72) { [weak self] in
+        doneButton = ToolbarButton(symbol: "checkmark", title: "完成", tip: "完成：复制并保存（回车）", style: .primary) { [weak self] in
             self?.onDone?()
         }
-        doneButton.contentTintColor = NSColor(srgbRed: 0.35, green: 0.85, blue: 0.45, alpha: 1)
 
-        let row = NSStackView(views: [label, autoButton, cancel, doneButton])
-        row.orientation = .horizontal
-        row.spacing = 4
-        row.edgeInsets = NSEdgeInsets(top: 5, left: 12, bottom: 5, right: 8)
-        panel.contentView = RecordingControlBar.hudBackground(containing: row, cornerRadius: 9)
+        let row = Theme.row([label, autoButton, Theme.dividerView(), cancel, doneButton],
+                            insets: NSEdgeInsets(top: 5, left: 12, bottom: 5, right: 6))
+        panel.contentView = Theme.bar(containing: row)
         panel.setContentSize(row.fittingSize)
         setStatus(Self.startText)
     }
 
     func setStatus(_ text: String, warning: Bool = false) {
         label.stringValue = text
-        label.textColor = warning ? .systemYellow : .white
+        label.textColor = warning ? Theme.warning : Theme.text
         isWarning = warning
     }
 
@@ -111,13 +108,18 @@ final class LongShotThumbView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-        let outer = CGPath(roundedRect: bounds, cornerWidth: 8, cornerHeight: 8, transform: nil)
+        let outer = CGPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), cornerWidth: Theme.barRadius, cornerHeight: Theme.barRadius,
+                           transform: nil)
         ctx.addPath(outer)
-        ctx.setFillColor(NSColor.black.withAlphaComponent(0.72).cgColor)
+        ctx.setFillColor(Theme.solidFill.cgColor)
         ctx.fillPath()
+        ctx.addPath(outer)
+        ctx.setStrokeColor(Theme.border.cgColor)
+        ctx.setLineWidth(1)
+        ctx.strokePath()
         let box = bounds.insetBy(dx: Self.inset, dy: Self.inset)
         guard let image else {
-            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.white]
+            let attrs: [NSAttributedString.Key: Any] = [.font: Theme.small(), .foregroundColor: Theme.secondaryText]
             ("预览" as NSString).draw(at: CGPoint(x: box.minX + 4, y: box.maxY - 18), withAttributes: attrs)
             return
         }
