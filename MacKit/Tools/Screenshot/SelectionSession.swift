@@ -15,6 +15,7 @@ enum SelectionOutcome {
     case record(RecordTarget)        // 录屏：选好了要录哪里
     case recognize(SelectionResult)  // 识别文字：选好的那块图
     case longShot(ScreenRegion)      // 长截图：选好了要拍哪一块
+    case beautify(SelectionResult)   // 美化：带着标注的那张图（台阶 13）
     case cancelled
 }
 
@@ -220,6 +221,7 @@ final class SelectionSession {
         editor.onSave = { [weak self] in self?.saveAs() }
         editor.onRecognize = { [weak self] in self?.finishRecognize() }
         editor.onLongShot = { [weak self] in self?.finishLongShot() }
+        editor.onBeautify = { [weak self] in self?.finishBeautify() }
         editor.onCancel = { [weak self] in self?.cancel() }
         editing = (screen, editor, mosaic)
         screen.view.beginEditing(editor, selection: rect)
@@ -269,6 +271,13 @@ final class SelectionSession {
               let result = Self.crop(image: editing.screen.frozen.image, viewSize: editing.screen.view.bounds.size, rect: rect,
                                      screenOrigin: editing.screen.frozen.screen.frame.origin) else { return }
         end(.recognize(result))
+    }
+
+    /// 截图工具栏上点"美化"：带着标注交给美化窗口
+    func finishBeautify() {
+        guard !isSaving else { return }
+        guard let result = export() else { end(.cancelled); return }
+        end(.beautify(result))
     }
 
     /// 截图工具栏上点"长截图"：画的标注不要了，就用这个框

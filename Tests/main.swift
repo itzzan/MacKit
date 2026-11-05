@@ -412,5 +412,63 @@ check(EditGeometry.scale([CGPoint(x: 5, y: 0), CGPoint(x: 5, y: 10)], from: CGRe
                          to: CGRect(x: 15, y: 0, width: 4, height: 20)) == [CGPoint(x: 17, y: 0), CGPoint(x: 17, y: 20)],
       "拉伸一条竖直线：横向只平移，不除以 0")
 
+// MARK: 截图美化、贴图转翻（台阶 13）
+check(BeautifyMath.padding(for: CGSize(width: 800, height: 500), level: .medium) == 50
+      && BeautifyMath.padding(for: CGSize(width: 100, height: 60), level: .medium) == 28
+      && BeautifyMath.padding(for: CGSize(width: 3000, height: 2000), level: .medium) == 90, "美化留白：按短边的比例，限制在 28–90 点")
+check(BeautifyMath.padding(for: CGSize(width: 800, height: 500), level: .small) < BeautifyMath.padding(for: CGSize(width: 800, height: 500), level: .medium)
+      && BeautifyMath.padding(for: CGSize(width: 800, height: 500), level: .medium) < BeautifyMath.padding(for: CGSize(width: 800, height: 500), level: .large),
+      "美化留白：小 < 中 < 大")
+let beautyLayout = BeautifyMath.layout(imageSize: CGSize(width: 800, height: 500), style: .standard)
+check(beautyLayout.canvas == CGSize(width: 900, height: 600) && beautyLayout.image == CGRect(x: 50, y: 50, width: 800, height: 500),
+      "美化：整张图 = 截图 + 两边留白，截图在正中间")
+check(BeautifyMath.cornerRadius(for: CGSize(width: 800, height: 500), corner: .large) == 18
+      && BeautifyMath.cornerRadius(for: CGSize(width: 40, height: 20), corner: .large) == 5
+      && BeautifyMath.cornerRadius(for: CGSize(width: 800, height: 500), corner: .none) == 0, "美化圆角：小截图不会圆得太过")
+func solid(_ r: UInt8, _ g: UInt8, _ b: UInt8, count: Int) -> [UInt8] { (0..<count).flatMap { _ in [r, g, b, 255] } }
+let mostlyOrange = solid(250, 140, 30, count: 70) + solid(255, 255, 255, count: 30)
+let orange = BeautifyMath.autoGradient(rgba: mostlyOrange, width: 10, height: 10)
+check(orange.name == "自动" && orange.to.0 > orange.to.2 + 0.2 && orange.from.0 < orange.to.0, "自动配色：截图主色是橙色 → 橙色渐变（一头暗一头亮）")
+check(BeautifyMath.autoGradient(rgba: solid(120, 120, 120, count: 100), width: 10, height: 10) == BeautifyMath.presets[0],
+      "自动配色：黑白灰的截图 → 用默认的蓝紫")
+check(abs(BeautifyMath.hue(1, 0, 0) - 0) < 0.001 && abs(BeautifyMath.hue(0, 1, 0) - 1.0 / 3) < 0.001
+      && abs(BeautifyMath.hue(0, 0, 1) - 2.0 / 3) < 0.001, "色相：红 0、绿 1/3、蓝 2/3")
+
+// 3 宽 2 高的小图：左上红、右上绿、左下蓝，别的白
+func tinyImage() -> CGImage {
+    let px: [UInt8] = [255, 0, 0, 255,  0, 255, 0, 255,  0, 255, 0, 255,
+                       0, 0, 255, 255,  255, 255, 255, 255,  255, 255, 255, 255]
+    let provider = CGDataProvider(data: Data(px) as CFData)!
+    return CGImage(width: 3, height: 2, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: 12,
+                   space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                   provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+}
+/// 读像素，y 从上往下数
+func px(_ image: CGImage, _ x: Int, _ y: Int) -> [UInt8] {
+    var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
+    let ctx = CGContext(data: &bytes, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                        space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+    let i = (y * image.width + x) * 4
+    return Array(bytes[i..<(i + 3)])
+}
+let tiny = tinyImage()
+let right = PinGeometry.apply(.rotateRight, to: tiny)!
+check(right.width == 2 && right.height == 3 && px(right, 1, 0) == [255, 0, 0] && px(right, 0, 0) == [0, 0, 255],
+      "贴图向右转：宽高对调，左上的红跑到右上，左下的蓝跑到左上")
+let left = PinGeometry.apply(.rotateLeft, to: tiny)!
+check(left.width == 2 && left.height == 3 && px(left, 0, 2) == [255, 0, 0], "贴图向左转：左上的红跑到左下")
+var spun = tiny
+for _ in 0..<4 { spun = PinGeometry.apply(.rotateRight, to: spun)! }
+check((0..<3).allSatisfy { x in (0..<2).allSatisfy { y in px(spun, x, y) == px(tiny, x, y) } }, "转四次回到原样")
+let flipped = PinGeometry.apply(.flipHorizontal, to: tiny)!
+let upside = PinGeometry.apply(.flipVertical, to: tiny)!
+check(px(flipped, 2, 0) == [255, 0, 0] && px(upside, 0, 1) == [255, 0, 0]
+      && px(PinGeometry.apply(.flipHorizontal, to: flipped)!, 0, 0) == [255, 0, 0], "左右翻、上下翻，翻两次回到原样")
+check(PinGeometry.size(after: .rotateLeft, CGSize(width: 300, height: 200)) == CGSize(width: 200, height: 300)
+      && PinGeometry.size(after: .flipVertical, CGSize(width: 300, height: 200)) == CGSize(width: 300, height: 200)
+      && PinGeometry.rotatedFrame(CGRect(x: 100, y: 100, width: 300, height: 200)) == CGRect(x: 150, y: 50, width: 200, height: 300),
+      "转 90° 后贴图以中心为准宽高对调")
+
 print(failures == 0 ? "UNIT TESTS OK" : "UNIT TESTS FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)

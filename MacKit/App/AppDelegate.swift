@@ -27,8 +27,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let status = SystemStatusTool()
     private let keepAwake = KeepAwakeTool()
     private let windowTips = WindowTipsTool()
+    private let beautify = BeautifyTool()
     private lazy var modules: [ToolModule] = [status, screenshot, longShot, pin, clipboard, recorder, ocr, measure,
-                                              keepAwake, windowTips]
+                                              keepAwake, windowTips, beautify]
     /// 菜单分组（台阶 10）：每组一个小标题，常用操作放第一层，设置收进这一组最后的"设置"子菜单
     private struct MenuGroup {
         let title: String
@@ -110,6 +111,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pin.onRecognize = { [weak self] image in self?.ocr.recognize(image) }
         screenshot.onLongShot = { [weak self] region in self?.longShot.start(region) }
         longShot.onPin = { [weak self] image, size in self?.pin.pinImage(image, pointSize: size) }
+        screenshot.onBeautify = { [weak self] result in self?.beautify.open(result.image, pointSize: result.pointSize) }
+        pin.onBeautify = { [weak self] image, size in self?.beautify.open(image, pointSize: size) }
+        beautify.onPin = { [weak self] image, size in self?.pin.pinImage(image, pointSize: size) }
         keepAwake.dryRun = selfTest                 // 自检时录屏状态变来变去，别真的去挡系统休眠
         recorder.onBusyChange = { [weak self] busy in self?.keepAwake.setRecording(busy) }
         keepAwake.onChange = { [weak self] on in

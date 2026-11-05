@@ -131,6 +131,7 @@ MacKit/
     Recorder/     录屏：选区域、控制条、倒计时、红框、录制小条、暂停拼接、定时、预览剪辑、GIF、点击高亮、按键显示、摄像头
     Recognize/    识别工具：识别文字和二维码、结果窗口、取色用的像素读取、测量
     LongShot/     长截图：边拍边拼的算法、控制条和预览条、自动滚动
+    Beautify/     截图美化：背景、留白、圆角、阴影，美化窗口
     Misc/         杂项：系统状态（CPU、内存、网速、磁盘、电池）、防休眠、排窗口小抄
   Resources/      Info.plist、App 图标
 Config/           签名设置（Local.xcconfig 是本机私有的）

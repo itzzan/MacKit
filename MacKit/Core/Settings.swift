@@ -325,6 +325,31 @@ enum Settings {
     }
 
     /// 按 C 复制颜色：HEX（默认，#FF3B30）还是 RGB（255, 59, 48）
+    /// 截图美化上次用的样式（台阶 13）。背景：0–7 预设渐变、8 自动配色、9 不要背景
+    static var beautifyStyle: BeautifyStyle {
+        get {
+            var s = BeautifyStyle.standard
+            if let bg = store.object(forKey: "beautify.background") as? Int {
+                s.background = bg == 8 ? .auto : bg == 9 ? .none : .preset(min(max(bg, 0), BeautifyMath.presets.count - 1))
+            }
+            if let p = store.object(forKey: "beautify.padding") as? Int, let level = BeautifyStyle.Level(rawValue: p) { s.padding = level }
+            if let c = store.object(forKey: "beautify.corner") as? Int, let corner = BeautifyStyle.Corner(rawValue: c) { s.corner = corner }
+            if let shadow = store.object(forKey: "beautify.shadow") as? Bool { s.shadow = shadow }
+            return s
+        }
+        set {
+            let bg: Int = switch newValue.background {
+            case .preset(let i): i
+            case .auto: 8
+            case .none: 9
+            }
+            store.set(bg, forKey: "beautify.background")
+            store.set(newValue.padding.rawValue, forKey: "beautify.padding")
+            store.set(newValue.corner.rawValue, forKey: "beautify.corner")
+            store.set(newValue.shadow, forKey: "beautify.shadow")
+        }
+    }
+
     static var colorAsHex: Bool {
         get { store.object(forKey: "color.hex") as? Bool ?? true }
         set { store.set(newValue, forKey: "color.hex") }

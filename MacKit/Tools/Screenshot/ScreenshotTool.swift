@@ -11,6 +11,8 @@ final class ScreenshotTool: ToolModule {
     var onRecognize: ((CGImage) -> Void)?
     /// 工具栏上点"长截图"或菜单里"长截图"选好了框：交给长截图积木（AppDelegate 里接上）
     var onLongShot: ((ScreenRegion) -> Void)?
+    /// 工具栏上点"美化"：交给美化积木（AppDelegate 里接上）
+    var onBeautify: ((SelectionResult) -> Void)?
     private var hotKeyID: UInt32?
     private var session: SelectionSession?
     private var isPreparing = false
@@ -107,6 +109,8 @@ final class ScreenshotTool: ToolModule {
             onRecognize?(result.image)
         case .longShot(let region):
             onLongShot?(region)
+        case .beautify(let result):
+            onBeautify?(result)
         case .record, .cancelled:
             break
         }

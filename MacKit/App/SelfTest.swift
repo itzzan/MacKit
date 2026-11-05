@@ -41,6 +41,8 @@ enum SelfTest {
         testAnnotationExport()
         testEditingFlow()
         testSelectEdit()
+        testBeautify()
+        testPinTransforms()
         testTextEditing()
         testPinAnnotation()
         testClipboard()
@@ -525,6 +527,126 @@ enum SelfTest {
             check(false, "模糊导出")
         }
         check(AnnotationTool.forKey("b") == .blur && editor.toolbar.toolButtons[.blur] != nil, "工具栏有\u{201C}模糊\u{201D}，快捷键 B")
+    }
+
+    /// 台阶 13：截图美化
+    private static func testBeautify() {
+        let image = makeTestImage(width: 400, height: 300)
+        let size = CGSize(width: 200, height: 150)
+        // 美化窗口会记住样式：先存下你的设置，测完原样放回去
+        let keys = ["beautify.background", "beautify.padding", "beautify.corner", "beautify.shadow"]
+        let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
+        defer { for (k, v) in zip(keys, saved) { if let v { UserDefaults.standard.set(v, forKey: k) } else { UserDefaults.standard.removeObject(forKey: k) } } }
+
+        if let out = BeautifyRenderer.render(image, pointSize: size, style: .standard, scale: 2) {
+            let corner = pixel(out, x: 3, y: 3), center = pixel(out, x: out.width / 2, y: out.height / 2)
+            let source = pixel(image, x: 200, y: 150)
+            check(out.width == 512 && out.height == 412 && corner.b > 200 && corner.r < 140 && center == source,
+                  "美化：四周加 28 点留白（\(out.width)×\(out.height)），角上是蓝紫渐变，中间是截图原样")
+        } else { check(false, "美化画得出来") }
+        var none = BeautifyStyle.standard
+        none.background = .none
+        if let out = BeautifyRenderer.render(image, pointSize: size, style: none, scale: 2) {
+            check(pixelAlpha(out, x: 1, y: 1) == 0 && pixelAlpha(out, x: out.width / 2, y: out.height / 2) == 255,
+                  "美化选\u{201C}不要背景\u{201D}：四周透明，截图不透明")
+        }
+        var square = BeautifyStyle.standard
+        square.corner = .large
+        if let out = BeautifyRenderer.render(image, pointSize: size, style: square, scale: 2) {
+            let l = BeautifyMath.layout(imageSize: size, style: square).image
+            let cornerPx = pixel(out, x: Int(l.minX * 2) + 1, y: Int((BeautifyMath.layout(imageSize: size, style: square).canvas.height - l.maxY) * 2) + 1)
+            check(cornerPx != pixel(image, x: 0, y: 0), "大圆角：截图的角被切掉，露出背景")
+        }
+
+        let w = BeautifyWindow(image: image, pointSize: size, style: .standard)
+        check(w.preview.image != nil && w.swatches.count == 10 && w.swatches[0].isSelectedLook, "美化窗口：有预览、8 种渐变 + 自动 + 无，默认选中蓝紫")
+        w.swatches[9].performClick(nil)
+        check(w.style.background == .none && Settings.beautifyStyle.background == .none && w.swatches[9].isSelectedLook,
+              "点\u{201C}无\u{201D}：换成不要背景，并记住")
+        let before = w.preview.image?.size ?? .zero
+        w.paddingControl.selectedSegment = 2
+        w.shadowBox.state = .off
+        w.controlsChanged()
+        check(w.style.padding == .large && !w.style.shadow && Settings.beautifyStyle.padding == .large
+              && (w.preview.image?.size ?? .zero) != before, "改留白、关阴影：预览马上跟着变，样式记住了")
+        var got: CGSize?
+        w.onDone = { _, s in got = s }
+        w.done()
+        check(got == BeautifyMath.layout(imageSize: size, style: w.style).canvas, "点完成：交出原图清晰度的美化图")
+        let again = BeautifyWindow(image: image, pointSize: size, style: Settings.beautifyStyle)
+        check(again.style.padding == .large && again.style.background == .none, "下次打开：还是上次挑的样式")
+
+        let pb = NSPasteboard(name: NSPasteboard.Name("local.mackit.selftest.beautify.\(UUID().uuidString)"))
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MacKitBeautify-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder); pb.releaseGlobally() }
+        if let r = again.result(), let out = BeautifyTool.output(r.image, pointSize: r.pointSize, pasteboard: pb, folder: folder) {
+            check(out.saved && pb.data(forType: .png) != nil, "美化完成：复制到剪贴板，同时存成 PNG")
+        } else { check(false, "美化完成能复制保存") }
+
+        // 截图工具栏的"美化"按钮
+        let viewSize = CGSize(width: 1512, height: 982)
+        let container = NSView(frame: CGRect(origin: .zero, size: viewSize))
+        let editor = AnnotationEditor(container: container, mosaic: MosaicSource(image: makeTestImage(width: 3024, height: 1964), viewSize: viewSize))
+        var beautified = 0
+        editor.onBeautify = { beautified += 1 }
+        findButton(in: editor.toolbar) { $0.toolTip?.hasPrefix("美化") == true }?.performClick(nil)
+        check(beautified == 1, "截图工具栏有\u{201C}美化\u{201D}按钮")
+        editor.tearDown()
+    }
+
+    /// 台阶 13：贴图转、翻、裁、撤回，找回关掉的贴图
+    private static func testPinTransforms() {
+        let image = makeTestImage(width: 400, height: 300)
+        let pin = PinWindow(image: image, pointSize: NSSize(width: 200, height: 150), frame: CGRect(x: 100, y: 100, width: 200, height: 150), scale: 1)
+        pin.document.add(Annotation(tool: .rect, color: .green, size: .medium, points: [CGPoint(x: 20, y: 20), CGPoint(x: 60, y: 60)]))
+        pin.restoreAnnotations(pin.document.checkpoint())
+        let annotated = pin.image
+
+        pin.transform(.rotateRight)
+        check(pin.basePointSize == NSSize(width: 150, height: 200) && pin.image.width == 300 && pin.image.height == 400
+              && pin.document.items.isEmpty && pin.frame == CGRect(x: 125, y: 75, width: 150, height: 200),
+              "贴图向右转：宽高对调、以中心为准，标注压进了图里")
+        pin.pinView?.keyDown(with: key("1", code: 18))
+        check(pin.basePointSize == NSSize(width: 200, height: 150) && pixel(pin.image, x: 10, y: 10) == pixel(annotated, x: 10, y: 10),
+              "按 1 再向左转：转回原来的方向")
+        pin.undoTransform()
+        pin.undoTransform()
+        check(pin.basePointSize == NSSize(width: 200, height: 150) && pin.document.items.count == 1 && pin.originalImage === image
+              && pin.frame == CGRect(x: 100, y: 100, width: 200, height: 150), "⌘Z 两次：回到转之前，标注回来、还能改")
+
+        pin.pinView?.keyDown(with: key("3", code: 20))
+        let blueBefore = pixel(annotated, x: 300, y: 300), blueAfter = pixel(pin.image, x: 99, y: 300)
+        check(blueAfter == blueBefore, "按 3 左右翻：右边的蓝块翻到左边")
+        _ = pin.pinView?.performKeyEquivalent(with: key("z", code: 6, mods: .command))
+        check(pin.document.items.count == 1 && !pin.canUndoTransform, "贴图上按 ⌘Z：撤回翻转")
+
+        pin.beginCrop(present: false)
+        check(pin.isCropping && pin.cropView?.cropRect == CGRect(x: 0, y: 0, width: 200, height: 150), "右键裁剪：出现框，一开始是整张")
+        pin.endCrop(nil)
+        check(!pin.isCropping && pin.basePointSize == NSSize(width: 200, height: 150), "裁剪时按 Esc：不裁了")
+        pin.beginCrop(present: false)
+        pin.cropView?.setCrop(CGRect(x: 50, y: 25, width: 100, height: 75))
+        pin.endCrop(pin.cropView?.cropRect)
+        check(pin.basePointSize == NSSize(width: 100, height: 75) && pin.image.width == 200
+              && pin.frame == CGRect(x: 150, y: 125, width: 100, height: 75), "裁剪：只留中间那块，留下的部分在屏幕上不挪地方")
+        let titles = pin.makeContextMenu().items.map(\.title)
+        check(titles.contains("美化…") && titles.contains("旋转和翻转") && titles.contains("裁剪") && titles.contains("撤回上一次转 / 翻 / 裁"),
+              "贴图右键：美化、旋转和翻转、裁剪、撤回")
+        pin.undoTransform()
+
+        // 找回关掉的贴图
+        let tool = PinTool()
+        tool.remember(pin)
+        check(tool.closed.count == 1 && tool.menuItems().contains { $0.title == "找回关掉的贴图（1 张）" }, "关掉一张：菜单里能找回")
+        guard let back = tool.reopen(at: 0, present: false) else { check(false, "找回贴图"); return }
+        check(back.frame == pin.frame && back.basePointSize == pin.basePointSize && back.document.items.count == 1
+              && tool.closed.isEmpty && tool.pins.count == 1, "找回：原来的位置、大小，标注也在")
+        back.closePin()
+        check(tool.closed.count == 1 && tool.pins.isEmpty, "再关掉：又进了找回列表")
+        for _ in 0..<25 { tool.remember(pin) }
+        check(tool.closed.count == PinTool.closedLimit, "最多记 20 张")
+        tool.clearClosed()
+        check(tool.closed.isEmpty && PinTool.thumbSize(NSSize(width: 480, height: 160)) == NSSize(width: 48, height: 16), "清空列表；菜单小图等比例")
     }
 
     private static func testTextEditing() {

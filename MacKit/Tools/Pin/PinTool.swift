@@ -9,6 +9,22 @@ final class PinTool: ToolModule {
     private var hidden = false
     /// 贴图右键"识别文字"：交给识别积木（AppDelegate 里接上）
     var onRecognize: ((CGImage) -> Void)?
+    /// 贴图右键"美化…"：交给美化积木（AppDelegate 里接上）
+    var onBeautify: ((CGImage, CGSize) -> Void)?
+
+    /// 关掉的贴图（台阶 13）：只在内存里记最近 20 张，退出 MacKit 就清空（拍板：不在硬盘上留截图）
+    struct ClosedPin {
+        let image: CGImage
+        let rendered: CGImage
+        let size: NSSize
+        let checkpoint: AnnotationDocument.Checkpoint
+        let frame: CGRect
+        let scale: CGFloat
+        let alpha: CGFloat
+        let closedAt: Date
+    }
+    static let closedLimit = 20
+    private(set) var closed: [ClosedPin] = []              // 最新的在前面
 
     func activate() { registerHotKeys() }
 
@@ -88,9 +104,13 @@ final class PinTool: ToolModule {
             Toast.show("贴图失败")
             return
         }
-        pin.onClosed = { [weak self] closed in self?.pins.removeAll { $0 === closed } }
+        pin.onClosed = { [weak self] gone in
+            self?.pins.removeAll { $0 === gone }
+            self?.remember(gone)
+        }
         pin.onCloseAll = { [weak self] in self?.closeAll() }
         pin.onRecognize = { [weak self] image in self?.onRecognize?(image) }
+        pin.onBeautify = { [weak self] image, size in self?.onBeautify?(image, size) }
         if hidden { showAll() }
         pins.append(pin)
         NSApp.unhideWithoutActivation()
@@ -120,8 +140,70 @@ final class PinTool: ToolModule {
         hidden = false
         for pin in all {
             pin.onClosed = nil
+            if pin.isCropping { pin.endCrop(nil) }
             pin.orderOut(nil)
+            remember(pin)
         }
+    }
+
+    // MARK: 找回关掉的贴图
+
+    func remember(_ pin: PinWindow) {
+        if pin.isCropping { pin.endCrop(nil) }
+        closed.insert(ClosedPin(image: pin.originalImage, rendered: pin.image, size: pin.basePointSize,
+                                checkpoint: pin.document.checkpoint(), frame: pin.frame, scale: pin.scale,
+                                alpha: pin.alphaValue, closedAt: Date()), at: 0)
+        if closed.count > Self.closedLimit { closed.removeLast(closed.count - Self.closedLimit) }
+    }
+
+    /// 贴回原来的位置、原来的大小，标注也在。present = false 只给自检用
+    @discardableResult
+    func reopen(at index: Int, present: Bool = true) -> PinWindow? {
+        guard closed.indices.contains(index) else { return nil }
+        let record = closed.remove(at: index)
+        let pin = PinWindow(image: record.image, pointSize: record.size, frame: record.frame, scale: record.scale)
+        pin.restoreAnnotations(record.checkpoint)
+        pin.alphaValue = record.alpha
+        if present {
+            show(pin)
+        } else {
+            pin.onClosed = { [weak self] gone in
+                self?.pins.removeAll { $0 === gone }
+                self?.remember(gone)
+            }
+            pins.append(pin)
+        }
+        Log.app.notice("pin: reopened a closed pin")
+        return pin
+    }
+
+    func clearClosed() { closed.removeAll() }
+
+    private func closedMenu() -> NSMenuItem {
+        let sub = NSMenu()
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        for (i, record) in closed.enumerated() {
+            let item = ActionMenuItem("\(formatter.string(from: record.closedAt)) 关掉的　\(Int(record.size.width))×\(Int(record.size.height))") {
+                [weak self] in self?.reopen(at: i)
+            }
+            let thumb = NSImage(cgImage: record.rendered, size: Self.thumbSize(record.size))
+            item.image = thumb
+            sub.addItem(item)
+        }
+        sub.addItem(.separator())
+        sub.addItem(ActionMenuItem("清空这个列表") { [weak self] in self?.clearClosed() })
+        sub.addItem(.info("只记这次打开 MacKit 以来的，退出就清空"))
+        let item = NSMenuItem(title: "找回关掉的贴图（\(closed.count) 张）", action: nil, keyEquivalent: "")
+        item.submenu = sub
+        return item
+    }
+
+    /// 菜单里的小图：最大 48×32 点，等比例
+    static func thumbSize(_ size: NSSize) -> NSSize {
+        guard size.width > 0, size.height > 0 else { return NSSize(width: 32, height: 32) }
+        let k = min(48 / size.width, 32 / size.height, 1)
+        return NSSize(width: max((size.width * k).rounded(), 1), height: max((size.height * k).rounded(), 1))
     }
 
     private func releaseClickThrough() {
@@ -160,6 +242,7 @@ final class PinTool: ToolModule {
             manageItem.submenu = manage
             items.append(manageItem)
         }
+        if !closed.isEmpty { items.append(closedMenu()) }
         return items
     }
 

@@ -184,6 +184,7 @@ final class AnnotationToolbar: NSView {
     var onSave: (() -> Void)?
     var onRecognize: (() -> Void)?
     var onLongShot: (() -> Void)?
+    var onBeautify: (() -> Void)?
     var onCancel: (() -> Void)?
     var onDone: (() -> Void)?
 
@@ -225,6 +226,9 @@ final class AnnotationToolbar: NSView {
         let longShot = ToolbarButton(symbol: "rectangle.expand.vertical", tip: "长截图：框不动，往下滚动拼成一张长图") { [weak self] in
             self?.onLongShot?()
         }
+        let beautify = ToolbarButton(symbol: "wand.and.stars", tip: "美化：加背景、圆角、阴影") { [weak self] in
+            self?.onBeautify?()
+        }
         let cancel = ToolbarButton(symbol: "xmark", tip: mode == .pin ? "放弃这次画的（Esc）" : "取消（Esc）") { [weak self] in
             self?.onCancel?()
         }
@@ -233,7 +237,7 @@ final class AnnotationToolbar: NSView {
             self?.onDone?()
         }
 
-        let actions: [NSView] = mode == .pin ? [cancel, done] : [recognize, longShot, pin, save, cancel, done]
+        let actions: [NSView] = mode == .pin ? [cancel, done] : [recognize, longShot, beautify, pin, save, cancel, done]
         hasPinAndSave = mode == .screenshot
         let mainRow = NSStackView(views: tools + [Self.divider(), undoButton, redoButton, Self.divider()] + actions)
         mainRow.orientation = .horizontal

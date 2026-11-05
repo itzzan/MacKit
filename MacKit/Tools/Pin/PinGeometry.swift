@@ -42,3 +42,52 @@ enum PinGeometry {
         return (CGRect(x: x, y: y, width: w, height: h), scale)
     }
 }
+
+/// 贴图转、翻（台阶 13）
+enum PinImageOp: Equatable {
+    case rotateLeft       // 向左转 90°（逆时针）
+    case rotateRight      // 向右转 90°（顺时针）
+    case flipHorizontal   // 左右翻
+    case flipVertical     // 上下翻
+
+    var swapsSize: Bool { self == .rotateLeft || self == .rotateRight }
+}
+
+extension PinGeometry {
+    /// 转 / 翻之后的大小
+    static func size(after op: PinImageOp, _ size: CGSize) -> CGSize {
+        op.swapsSize ? CGSize(width: size.height, height: size.width) : size
+    }
+
+    /// 转 90° 后贴图窗口的位置：以中心为准，宽高对调
+    static func rotatedFrame(_ frame: CGRect) -> CGRect {
+        CGRect(x: (frame.midX - frame.height / 2).rounded(), y: (frame.midY - frame.width / 2).rounded(),
+               width: frame.height, height: frame.width)
+    }
+
+    /// 把整张图转 / 翻一下（按像素画，不糊）
+    static func apply(_ op: PinImageOp, to image: CGImage) -> CGImage? {
+        let w = image.width, h = image.height
+        let out = op.swapsSize ? (h, w) : (w, h)
+        let space = image.colorSpace.flatMap { $0.supportsOutput ? $0 : nil } ?? CGColorSpace(name: CGColorSpace.sRGB)!
+        guard let ctx = CGContext(data: nil, width: out.0, height: out.1, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .none
+        switch op {
+        case .rotateRight:
+            ctx.translateBy(x: 0, y: CGFloat(w))
+            ctx.rotate(by: -.pi / 2)
+        case .rotateLeft:
+            ctx.translateBy(x: CGFloat(h), y: 0)
+            ctx.rotate(by: .pi / 2)
+        case .flipHorizontal:
+            ctx.translateBy(x: CGFloat(w), y: 0)
+            ctx.scaleBy(x: -1, y: 1)
+        case .flipVertical:
+            ctx.translateBy(x: 0, y: CGFloat(h))
+            ctx.scaleBy(x: 1, y: -1)
+        }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage()
+    }
+}
