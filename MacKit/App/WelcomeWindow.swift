@@ -5,6 +5,11 @@ import ApplicationServices
 enum AppLinks {
     static let home = URL(string: "https://github.com/itzzan/MacKit")!
     static let releases = URL(string: "https://github.com/itzzan/MacKit/releases")!
+
+    /// 某个版本的更新说明（GitHub 上的发布页）
+    static func releaseNotes(_ version: String) -> URL {
+        URL(string: "https://github.com/itzzan/MacKit/releases/tag/v\(version)")!
+    }
 }
 
 /// 欢迎窗口（1.0 起）：新用户第一次打开时出现；以后在"关于 MacKit → 使用说明"里再打开。
@@ -72,7 +77,7 @@ final class WelcomeWindow: NSObject, NSWindowDelegate {
             ScreenPermission.requestAndOpenSettings()
         }
         let access = permissionRow(key: "accessibility", title: "辅助功能",
-                                   detail: "剪贴板历史回车自动粘贴、长截图自动滚动时要用，可以先不开") {
+                                   detail: "剪贴板回车自动粘贴、连续粘贴、长截图自动滚动时要用，可以先不开") {
             ClipboardPaster.requestAccessibility()
             ClipboardPaster.openAccessibilitySettings()
         }

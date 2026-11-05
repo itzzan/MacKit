@@ -2027,6 +2027,20 @@ enum SelfTest {
               && !aboutTitles.contains("看看有没有新版本")
               && AppLinks.home.absoluteString == "https://github.com/itzzan/MacKit" && AppLinks.releases.path == "/itzzan/MacKit/releases",
               "关于 MacKit：使用说明、项目主页、检查更新…")
+        // 2.0 起：老用户第一次打开新的大版本弹一次提示条（台阶 18）
+        check(WhatsNew.shouldShow(firstLaunch: .nothing, lastVersion: nil, current: "2.0.0")
+              && WhatsNew.shouldShow(firstLaunch: .keepOldHotKeys, lastVersion: nil, current: "2.0.0")
+              && WhatsNew.shouldShow(firstLaunch: .nothing, lastVersion: "1.6.0", current: "2.0.0"),
+              "从 1.x 升到 2.0：第一次打开弹\u{201C}MacKit 2.0 装好了\u{201D}")
+        check(!WhatsNew.shouldShow(firstLaunch: .welcome, lastVersion: nil, current: "2.0.0"), "新用户第一次装 2.0：只有欢迎窗口，不弹这个")
+        check(!WhatsNew.shouldShow(firstLaunch: .nothing, lastVersion: "2.0.0", current: "2.0.0")
+              && !WhatsNew.shouldShow(firstLaunch: .nothing, lastVersion: "2.0.0", current: "2.1.0"),
+              "再打开、升到 2.1：不再弹")
+        check(!WhatsNew.shouldShow(firstLaunch: .nothing, lastVersion: nil, current: "1.6.0"), "1.x 自己不弹")
+        let whatsNew = Toast.makeActionsPanel(WhatsNew.message(for: "2.0.0"), actions: [("看看都有什么", {})])
+        check(WhatsNew.message(for: "2.0.0").hasPrefix("MacKit 2.0 装好了") && whatsNew.frame.width < 760 && !whatsNew.isVisible
+              && AppLinks.releaseNotes("2.0.0").absoluteString == "https://github.com/itzzan/MacKit/releases/tag/v2.0.0",
+              "提示条写着\u{201C}MacKit 2.0 装好了\u{201D}，\u{201C}看看都有什么\u{201D}打开 GitHub 上 2.0 的更新说明（\(Int(whatsNew.frame.width)) 点宽）")
         let parts = AppInfo.version.split(separator: ".").compactMap { Int($0) }
         check(parts.count == 3 && parts[0] >= 1, "版本号是三段数字、1 以上：\(AppInfo.version)")
     }

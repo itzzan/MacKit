@@ -382,10 +382,17 @@ enum Settings {
         set { store.set(newValue, forKey: "welcome.done") }
     }
 
+    /// 上次打开的是哪个版本（2.0 起记；nil = 2.0 以前的版本没记过）
+    static var lastVersion: String? {
+        get { store.string(forKey: "app.lastVersion") }
+        set { store.set(newValue, forKey: "app.lastVersion") }
+    }
+
     /// 这台电脑上以前用过 MacKit 没有：设置里有 MacKit 自己的东西，或者存过剪贴板历史
     static var hasPreviousData: Bool {
         let domain = store.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "local.mackit.MacKit") ?? [:]
-        let own = domain.keys.filter { !$0.hasPrefix("NS") && !$0.hasPrefix("Apple") && !$0.hasPrefix("com.apple") && $0 != "welcome.done" }
+        let own = domain.keys.filter { !$0.hasPrefix("NS") && !$0.hasPrefix("Apple") && !$0.hasPrefix("com.apple")
+            && $0 != "welcome.done" && $0 != "app.lastVersion" }
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
             .appendingPathComponent("MacKit", isDirectory: true)
         return !own.isEmpty || support.map { FileManager.default.fileExists(atPath: $0.path) } == true
@@ -428,5 +435,21 @@ enum FirstLaunch: Equatable {
     static func decide(done: Bool, hasPreviousData: Bool) -> FirstLaunch {
         if done { return .nothing }
         return hasPreviousData ? .keepOldHotKeys : .welcome
+    }
+}
+
+/// 2.0 起：以前用过 MacKit 的人，第一次打开新的大版本时弹一次"装好了"的提示条（台阶 18 拍板 A）
+enum WhatsNew {
+    /// 新用户走欢迎窗口，不弹；上次打开的大版本比现在小才弹（没记过 = 2.0 以前的 1.x）
+    static func shouldShow(firstLaunch: FirstLaunch, lastVersion: String?, current: String) -> Bool {
+        guard firstLaunch != .welcome else { return false }
+        let now = AppVersion.parts(current).first ?? 0
+        let before = lastVersion.flatMap { AppVersion.parts($0).first } ?? 1
+        return now >= 2 && now > before
+    }
+
+    static func message(for version: String) -> String {
+        let major = AppVersion.parts(version).first ?? 2
+        return "MacKit \(major).0 装好了：截图能美化、剪贴板能收藏、设置都在菜单最下面"
     }
 }

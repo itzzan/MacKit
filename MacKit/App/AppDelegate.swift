@@ -101,6 +101,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .nothing:
             break
         }
+        // 2.0 起：老用户第一次打开新的大版本弹一次提示；自检不记、不弹（和你真的设置是同一份）
+        let showWhatsNew = !selfTest
+            && WhatsNew.shouldShow(firstLaunch: firstLaunch, lastVersion: Settings.lastVersion, current: AppInfo.version)
+        if !selfTest { Settings.lastVersion = AppInfo.version }
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
@@ -140,6 +144,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if firstLaunch == .welcome {
             Settings.welcomeDone = true
             showWelcome()
+        }
+        if showWhatsNew {
+            let version = AppInfo.version
+            Log.app.notice("whats new \(version, privacy: .public)")
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1.5))              // 等菜单栏图标先出来
+                Toast.showActions(WhatsNew.message(for: version), actions: [
+                    ("看看都有什么", { NSWorkspace.shared.open(AppLinks.releaseNotes(version)) }),
+                ], seconds: 15)
+            }
         }
 
         if selfTest {

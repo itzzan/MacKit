@@ -14,50 +14,110 @@ enum StylePreview {
     static func runWelcome(arguments: [String]) {
         guard let i = arguments.firstIndex(of: "--welcome-preview"), arguments.indices.contains(i + 1) else { exit(2) }
         let dark = arguments.contains("dark")
+        useNewUserHotKeys()                                   // 画新用户看到的样子：⌃⇧ 那套选着
         let w = WelcomeWindow()
-        guard let content = w.window.contentView else { exit(1) }
-        content.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        content.layoutSubtreeIfNeeded()
-        content.displayIfNeeded()
-        guard let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { exit(1) }
-        content.cacheDisplay(in: content.bounds, to: rep)
-        guard let image = rep.cgImage, let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
-                                  space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { exit(1) }
-        ctx.setFillColor((dark ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 0.96, alpha: 1)).cgColor)
-        ctx.fill(CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        guard let out = ctx.makeImage(), write(out, to: arguments[i + 1]) else { exit(1) }
+        guard let content = w.window.contentView,
+              let out = renderView(content, dark: dark, background: dark ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 0.96, alpha: 1),
+                                   fit: false),
+              write(out, to: arguments[i + 1]) else { exit(1) }
         print("欢迎窗口：\(arguments[i + 1])　\(out.width)×\(out.height)")
         exit(0)
     }
 
-    /// 设置窗口五页各画一张图（不弹窗口、不改设置）：--settings-preview 输出前缀 [dark] → 前缀-通用.png …
+    /// 设置窗口画成图（不弹窗口、不改设置）：
+    ///   --settings-preview 输出前缀 [dark]         → 五页各一张：前缀-通用.png …
+    ///   --settings-preview 输出.png readme [dark]  → README 用的一张：上面一排分页（照着系统样子画的）+ 快捷键页
     static func runSettings(arguments: [String]) {
         guard let i = arguments.firstIndex(of: "--settings-preview"), arguments.indices.contains(i + 1) else { exit(2) }
         let dark = arguments.contains("dark")
+        let background = dark ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 0.93, alpha: 1)
         var hooks = SettingsHooks()
         hooks.dryRun = true
         let settings = SettingsWindow(hooks: hooks)
+        if arguments.contains("readme") {
+            useNewUserHotKeys()
+            guard let pane = settings.panes[.shortcuts]?.view else { exit(1) }
+            let page = settingsReadmeView(pane: pane, selected: .shortcuts)
+            guard let out = renderView(page, dark: dark, background: background), write(out, to: arguments[i + 1]) else { exit(1) }
+            print("设置窗口：\(arguments[i + 1])　\(out.width)×\(out.height)")
+            exit(0)
+        }
         for pane in SettingsWindow.Pane.allCases {
-            guard let view = settings.panes[pane]?.view else { exit(1) }
-            view.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-            view.setFrameSize(view.fittingSize)
-            view.layoutSubtreeIfNeeded()
-            view.displayIfNeeded()
-            guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { exit(1) }
-            view.cacheDisplay(in: view.bounds, to: rep)
-            guard let image = rep.cgImage, let space = CGColorSpace(name: CGColorSpace.sRGB),
-                  let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
-                                      space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { exit(1) }
-            ctx.setFillColor((dark ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 0.93, alpha: 1)).cgColor)
-            ctx.fill(CGRect(x: 0, y: 0, width: image.width, height: image.height))
-            ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            guard let view = settings.panes[pane]?.view, let out = renderView(view, dark: dark, background: background) else { exit(1) }
             let path = "\(arguments[i + 1])-\(pane.title).png"
-            guard let out = ctx.makeImage(), write(out, to: path) else { exit(1) }
+            guard write(out, to: path) else { exit(1) }
             print("设置 \(pane.title)：\(path)　\(out.width)×\(out.height)")
         }
         exit(0)
+    }
+
+    /// README 里画新用户默认的 ⌃⇧1–⌃⇧6：只在这个进程的内存里换（不写进你的设置）
+    private static func useNewUserHotKeys() {
+        let c = HotKeyScheme.control.indices
+        let temp: [String: Any] = ["screenshot.hotkeyIndex": c[0], "pin.hotkeyIndex": c[1], "clipboard.hotkeyIndex": c[2],
+                                   "record.hotkeyIndex": c[3], "ocr.hotkeyIndex": c[4], "measure.hotkeyIndex": c[5]]
+        UserDefaults.standard.setVolatileDomain(temp, forName: UserDefaults.argumentDomain)
+        let saved = UserDefaults.standard.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "") ?? [:]
+        for a in HotKeyAction.allCases where saved[a.storeKey] != nil { print("（你单独改过\(a.title)，图里画的是你改的）") }
+    }
+
+    /// 一个视图按它合适的大小画成图（固定 2 倍清晰度，和接哪块屏幕无关），垫上底色
+    private static func renderView(_ view: NSView, dark: Bool, background: NSColor, fit: Bool = true) -> CGImage? {
+        view.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        if fit { view.setFrameSize(view.fittingSize) }
+        view.layoutSubtreeIfNeeded()
+        view.displayIfNeeded()
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width * 2),
+                                         pixelsHigh: Int(view.bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4,
+                                         hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0,
+                                         bitsPerPixel: 0) else { return nil }
+        rep.size = view.bounds.size
+        view.cacheDisplay(in: view.bounds, to: rep)
+        guard let image = rep.cgImage, let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.setFillColor(background.cgColor)
+        ctx.fill(CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return ctx.makeImage()
+    }
+
+    /// README 用：窗口标题 + 一排分页图标（选中的那页蓝色）+ 那一页
+    private static func settingsReadmeView(pane: NSView, selected: SettingsWindow.Pane) -> NSView {
+        let title = NSTextField(labelWithString: "MacKit 设置")
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        var tabs: [NSView] = []
+        for p in SettingsWindow.Pane.allCases {
+            let on = p == selected
+            let icon = NSImageView(image: NSImage(systemSymbolName: p.symbol, accessibilityDescription: p.title)?
+                .withSymbolConfiguration(.init(pointSize: 20, weight: .regular)) ?? NSImage())
+            icon.contentTintColor = on ? Theme.accent : .secondaryLabelColor
+            let label = NSTextField(labelWithString: p.title)
+            label.font = .systemFont(ofSize: 11)
+            label.textColor = on ? Theme.accent : .secondaryLabelColor
+            let item = NSStackView(views: [icon, label])
+            item.orientation = .vertical
+            item.spacing = 3
+            item.edgeInsets = NSEdgeInsets(top: 5, left: 10, bottom: 5, right: 10)
+            item.wantsLayer = true
+            item.layer?.cornerRadius = 6
+            if on { item.layer?.backgroundColor = NSColor.secondaryLabelColor.withAlphaComponent(0.12).cgColor }
+            tabs.append(item)
+        }
+        let strip = NSStackView(views: tabs)
+        strip.spacing = 4
+        let divider = NSBox()
+        divider.boxType = .separator
+        let head = NSStackView(views: [title, strip])
+        head.orientation = .vertical
+        head.spacing = 8
+        head.edgeInsets = NSEdgeInsets(top: 12, left: 0, bottom: 10, right: 0)
+        let page = NSStackView(views: [head, divider, pane])
+        page.orientation = .vertical
+        page.spacing = 0
+        page.alignment = .centerX
+        divider.widthAnchor.constraint(equalTo: page.widthAnchor).isActive = true
+        return page
     }
 
     static func run(arguments: [String]) {
@@ -93,6 +153,10 @@ enum StylePreview {
         pinBar.update(tool: .arrow, color: .red, size: .medium, canUndo: true, canRedo: false)
         list.append(Sample(title: "贴图上标注的工具栏", view: pinBar))
 
+        let penBar = AnnotationToolbar(mode: .liveDraw, standalone: true)
+        penBar.update(tool: .pen, color: .red, size: .medium, canUndo: true, canRedo: false)
+        list.append(Sample(title: "屏幕画笔的小工具（录屏时、开会共享屏幕时在屏幕上画）", view: penBar))
+
         list.append(Sample(title: "按钮：普通 / 鼠标放上去 / 按下 / 选中 / 主按钮 / 停止", view: buttonStrip()))
 
         let control = RecordingControlBar(systemAudio: true, microphone: false)
@@ -118,6 +182,9 @@ enum StylePreview {
                                           actions: [("预览剪辑", {}), ("存成 GIF", {}), ("在访达中显示", {})]).contentView {
             list.append(Sample(title: "带按钮的提示条", view: v))
         }
+        let queue = PasteQueueBar()
+        queue.update("连续粘贴 2 / 5　下一条：发票抬头：某某公司")
+        if let v = queue.panel.contentView { list.append(Sample(title: "连续粘贴的小条（每按一次 ⌘V 贴下一条）", view: v)) }
 
         let keys = KeyCastWindow()
         keys.show("⌘C", present: false)
