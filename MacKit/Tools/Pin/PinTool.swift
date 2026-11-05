@@ -7,6 +7,8 @@ final class PinTool: ToolModule {
     private(set) var hotKeysRegistered = false
     private var hotKeyIDs: [UInt32] = []
     private var hidden = false
+    private var pinKeyLive = false
+    private var toggleKeyLive = false
     /// 贴图右键"识别文字"：交给识别积木（AppDelegate 里接上）
     var onRecognize: ((CGImage) -> Void)?
     /// 贴图右键"美化…"：交给美化积木（AppDelegate 里接上）
@@ -32,11 +34,13 @@ final class PinTool: ToolModule {
 
     private func registerHotKeys() {
         for id in hotKeyIDs { HotKeyCenter.shared.unregister(id) }
-        let keys = Settings.pinHotKeys
-        let pinID = HotKeyCenter.shared.register(keys.pin) { [weak self] in self?.pinFromClipboard() }
-        let toggleID = HotKeyCenter.shared.register(keys.toggle) { [weak self] in self?.toggleAll() }
+        let pin = Settings.pinHotKey, toggle = Settings.pinToggleHotKey
+        let pinID = pin.flatMap { HotKeyCenter.shared.register($0) { [weak self] in self?.pinFromClipboard() } }
+        let toggleID = toggle.flatMap { HotKeyCenter.shared.register($0) { [weak self] in self?.toggleAll() } }
         hotKeyIDs = [pinID, toggleID].compactMap { $0 }
-        hotKeysRegistered = pinID != nil && toggleID != nil
+        hotKeysRegistered = (pin == nil || pinID != nil) && (toggle == nil || toggleID != nil)
+        pinKeyLive = pinID != nil
+        toggleKeyLive = toggleID != nil
     }
 
     // MARK: 贴图
@@ -213,25 +217,25 @@ final class PinTool: ToolModule {
     // MARK: 菜单
 
     func menuItems() -> [NSMenuItem] {
-        let keys = Settings.pinHotKeys
+        let pinKey = Settings.pinHotKey, toggleKey = Settings.pinToggleHotKey
         var items: [NSMenuItem] = []
         items.append(ActionMenuItem("贴图（剪贴板里的图片或文字）",
-                                    key: hotKeysRegistered ? keys.pin.menuKey : "",
-                                    modifiers: keys.pin.menuModifiers) { [weak self] in
+                                    key: pinKeyLive ? (pinKey?.menuKey ?? "") : "",
+                                    modifiers: pinKey?.menuModifiers ?? []) { [weak self] in
             self?.pinFromClipboard()
         })
         if !hotKeysRegistered {
-            items.append(.info("⚠︎ 快捷键 \(keys.pin.display) 没注册上，可能被别的软件占用，换一个试试"))
-        } else if let rival = keys.pin.runningRival {
-            items.append(.info("⚠︎ \(rival) 开着，它也用 \(keys.pin.display)，按一下会贴出两张"))
+            items.append(.info("⚠︎ 贴图的快捷键没注册上，可能被别的软件占用，在「设置 → 快捷键」里换一个"))
+        } else if let pinKey, let rival = pinKey.runningRival {
+            items.append(.info("⚠︎ \(rival) 开着，它也用 \(pinKey.display)，按一下会贴出两张"))
         }
 
         if !pins.isEmpty {
             // 已经贴了几张：管理的操作收进一个子菜单，免得菜单变长
             let manage = NSMenu()
             manage.addItem(ActionMenuItem(hidden ? "全部显示" : "全部隐藏",
-                                          key: hotKeysRegistered ? keys.toggle.menuKey : "",
-                                          modifiers: keys.toggle.menuModifiers) { [weak self] in
+                                          key: toggleKeyLive ? (toggleKey?.menuKey ?? "") : "",
+                                          modifiers: toggleKey?.menuModifiers ?? []) { [weak self] in
                 self?.toggleAll()
             })
             if pins.contains(where: { $0.isClickThrough }) {
@@ -246,21 +250,4 @@ final class PinTool: ToolModule {
         return items
     }
 
-    func settingsItems() -> [NSMenuItem] {
-        let keys = Settings.pinHotKeys
-        var items: [NSMenuItem] = []
-        let keyMenu = NSMenu()
-        for (index, preset) in PinHotKeyPresets.all.enumerated() {
-            let item = ActionMenuItem("\(preset.pin.display) 贴图，\(preset.toggle.display) 隐藏/显示　\(preset.pin.note)") { [weak self] in
-                Settings.pinHotKeyIndex = index
-                self?.registerHotKeys()
-            }
-            item.state = index == Settings.pinHotKeyIndex ? .on : .off
-            keyMenu.addItem(item)
-        }
-        let keyItem = NSMenuItem(title: "贴图快捷键：\(keys.pin.display) / \(keys.toggle.display)", action: nil, keyEquivalent: "")
-        keyItem.submenu = keyMenu
-        items.append(keyItem)
-        return items
-    }
 }

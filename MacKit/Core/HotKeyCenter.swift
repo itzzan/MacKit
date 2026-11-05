@@ -11,6 +11,9 @@ final class HotKeyCenter {
 
     private var actions: [UInt32: @MainActor () -> Void] = [:]
     private var refs: [UInt32: EventHotKeyRef] = [:]
+    private var combos: [UInt32: HotKeyCombo] = [:]
+    /// 设置窗口里正在录新的快捷键：MacKit 自己的快捷键先全部摘掉（台阶 17），免得按 ⌘1 直接截了图
+    private(set) var isSuspended = false
     private var nextID: UInt32 = 1
     private var handlerInstalled = false
 
@@ -29,6 +32,8 @@ final class HotKeyCenter {
         }
         refs[id] = ref
         actions[id] = action
+        combos[id] = combo
+        if isSuspended { UnregisterEventHotKey(ref); refs[id] = nil }
         Log.hotkey.notice("registered \(combo.display, privacy: .public) as #\(id)")
         return id
     }
@@ -36,6 +41,35 @@ final class HotKeyCenter {
     func unregister(_ id: UInt32) {
         if let ref = refs.removeValue(forKey: id) { UnregisterEventHotKey(ref) }
         actions[id] = nil
+        combos[id] = nil
+    }
+
+    /// 先全部摘掉（记着是哪些）
+    func suspend() {
+        guard !isSuspended else { return }
+        isSuspended = true
+        for (_, ref) in refs { UnregisterEventHotKey(ref) }
+        refs.removeAll()
+    }
+
+    /// 摘掉的全部挂回去
+    func resume() {
+        guard isSuspended else { return }
+        isSuspended = false
+        for (id, combo) in combos {
+            var ref: EventHotKeyRef?
+            let status = RegisterEventHotKey(combo.keyCode, combo.carbonModifiers, EventHotKeyID(signature: hotKeySignature, id: id),
+                                             GetApplicationEventTarget(), 0, &ref)
+            if status == noErr, let ref { refs[id] = ref }
+        }
+    }
+
+    /// 自检用：现在挂着几个
+    var registeredCount: Int { refs.count }
+
+    /// 自检用：这个组合现在真的挂在系统上没有
+    func isRegistered(_ combo: HotKeyCombo) -> Bool {
+        combos.contains { refs[$0.key] != nil && $0.value == combo }
     }
 
     fileprivate func fire(_ id: UInt32) {

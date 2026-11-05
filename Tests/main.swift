@@ -503,5 +503,22 @@ check(recentColors == [0x111111, 0x333333, 0x222222], "同一个颜色再取一�
 for c in 0..<30 { recentColors = ColorHistory.adding(c, to: recentColors) }
 check(recentColors.count == ColorHistory.limit && recentColors.first == 29, "最多记 20 个")
 
+// MARK: 设置窗口（台阶 17）：快捷键能不能设、写法，版本号比较
+let mine: [(name: String, keyCode: UInt16, modifiers: KeyModifiers)] = [("截图", 18, [.command]), ("录屏", 21, [.command])]
+check(HotKeyRules.check(keyCode: 1, modifiers: [.control, .option], others: mine) == .ok, "⌃⌥S：能设")
+check(HotKeyRules.check(keyCode: 1, modifiers: [], others: mine) == .needsModifier
+      && HotKeyRules.check(keyCode: 1, modifiers: [.shift], others: mine) == .needsModifier, "单按 S、⇧S：不让设（打字时会被截走）")
+check(HotKeyRules.check(keyCode: 122, modifiers: [], others: mine) == .ok, "F1 不带修饰键：能设")
+check(HotKeyRules.check(keyCode: 21, modifiers: [.command], others: mine) == .sameAs("录屏"), "和 MacKit 自己的撞了：说清楚撞了哪个")
+check(HotKeyRules.check(keyCode: 21, modifiers: [.shift, .command], others: mine) == .reserved("系统截图（⇧⌘4）")
+      && HotKeyRules.check(keyCode: 8, modifiers: [.command], others: mine) == .reserved("复制（⌘C）")
+      && HotKeyRules.check(keyCode: 12, modifiers: [.control, .option, .command], others: mine) == .reserved("MacKit 紧急退出（⌃⌥⌘Q）"),
+      "系统和各软件常用的（⇧⌘4、⌘C、紧急退出）：不让设")
+check(HotKeyRules.display(keyCode: 18, modifiers: [.shift, .command]) == "⇧⌘1" && HotKeyRules.display(keyCode: 2, modifiers: [.control, .shift]) == "⌃⇧D"
+      && HotKeyRules.display(keyCode: 99, modifiers: []) == "F3", "快捷键写法：⌃⌥⇧⌘ 的顺序")
+check(AppVersion.isNewer("v2.0.0", than: "1.5.1") && !AppVersion.isNewer("v1.0.0", than: "1.5.1") && !AppVersion.isNewer("1.5.1", than: "1.5.1")
+      && AppVersion.isNewer("1.10.0", than: "1.9.9") && AppVersion.isNewer("2", than: "1.9") && AppVersion.parts("v1.2.3-beta") == [1, 2, 3],
+      "版本号比较：v2.0.0 比 1.5.1 新，1.10 比 1.9 新，带 v 和后缀也认")
+
 print(failures == 0 ? "UNIT TESTS OK" : "UNIT TESTS FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)

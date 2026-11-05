@@ -24,10 +24,11 @@ final class ScreenshotTool: ToolModule {
 
     private func registerHotKey() {
         if let id = hotKeyID { HotKeyCenter.shared.unregister(id) }
-        hotKeyID = HotKeyCenter.shared.register(Settings.screenshotHotKey) { [weak self] in
-            self?.startSelection()
+        hotKeyID = nil
+        if let combo = Settings.screenshotHotKey {
+            hotKeyID = HotKeyCenter.shared.register(combo) { [weak self] in self?.startSelection() }
         }
-        hotKeyRegistered = hotKeyID != nil
+        hotKeyRegistered = Settings.screenshotHotKey == nil || hotKeyID != nil    // 你清掉了快捷键不算没注册上
     }
 
     // MARK: 截图流程
@@ -156,15 +157,15 @@ final class ScreenshotTool: ToolModule {
         var items: [NSMenuItem] = []
 
         items.append(ActionMenuItem("截图（框选区域 / 单击选窗口）",
-                                    key: hotKeyRegistered ? combo.menuKey : "",
-                                    modifiers: combo.menuModifiers) { [weak self] in
+                                    key: hotKeyID != nil ? (combo?.menuKey ?? "") : "",
+                                    modifiers: combo?.menuModifiers ?? []) { [weak self] in
             self?.startSelection(delay: 0.2)
         })
-        if !hotKeyRegistered {
-            items.append(.info("⚠︎ 快捷键 \(combo.display) 没注册上，可能被别的软件占用，换一个试试"))
-        } else if let rival = combo.runningRival {
+        if let combo, !hotKeyRegistered {
+            items.append(.info("⚠︎ 快捷键 \(combo.display) 没注册上，可能被别的软件占用，在「设置 → 快捷键」里换一个"))
+        } else if let combo, let rival = combo.runningRival {
             items.append(.info("⚠︎ \(rival) 开着，它也用 \(combo.display)，按一下会弹出两个截图"))
-            items.append(.info("　 先退出 \(rival)，或在下面的「截图快捷键」里换一个"))
+            items.append(.info("　 先退出 \(rival)，或在「设置 → 快捷键」里换一个"))
         }
         items.append(ActionMenuItem("截取整个屏幕") { [weak self] in self?.captureFullScreen() })
         items.append(ActionMenuItem("长截图（框选后往下滚，拼成一张长图）") { [weak self] in
@@ -184,71 +185,6 @@ final class ScreenshotTool: ToolModule {
         return items
     }
 
-    func settingsItems() -> [NSMenuItem] {
-        let combo = Settings.screenshotHotKey
-        var items: [NSMenuItem] = []
-        let colorMenu = NSMenu()
-        let hex = ActionMenuItem("HEX，比如 #FF3B30") { Settings.colorAsHex = true }
-        hex.state = Settings.colorAsHex ? .on : .off
-        let rgb = ActionMenuItem("RGB，比如 255, 59, 48") { Settings.colorAsHex = false }
-        rgb.state = Settings.colorAsHex ? .off : .on
-        colorMenu.addItem(hex)
-        colorMenu.addItem(rgb)
-        let colorItem = NSMenuItem(title: "截图时按 C 复制颜色：\(Settings.colorAsHex ? "HEX" : "RGB")", action: nil, keyEquivalent: "")
-        colorItem.submenu = colorMenu
-        items.append(colorItem)
-        let quick = ActionMenuItem("快速模式：松手直接复制，不出标注工具栏") { Settings.screenshotQuickMode.toggle() }
-        quick.state = Settings.screenshotQuickMode ? .on : .off
-        items.append(quick)
-
-        let hotKeyMenu = NSMenu()
-        for (index, preset) in HotKeyPresets.screenshot.enumerated() {
-            let item = ActionMenuItem("\(preset.display)　\(preset.note)") { [weak self] in
-                Settings.screenshotHotKeyIndex = index
-                self?.registerHotKey()
-            }
-            item.state = index == Settings.screenshotHotKeyIndex ? .on : .off
-            hotKeyMenu.addItem(item)
-        }
-        let hotKeyItem = NSMenuItem(title: "截图快捷键：\(combo.display)", action: nil, keyEquivalent: "")
-        hotKeyItem.submenu = hotKeyMenu
-        items.append(hotKeyItem)
-
-        let saveMenu = NSMenu()
-        let toggle = ActionMenuItem("截图时同时存成文件") { Settings.saveToFile.toggle() }
-        toggle.state = Settings.saveToFile ? .on : .off
-        saveMenu.addItem(toggle)
-        saveMenu.addItem(.info("位置：" + (Settings.saveFolder.path as NSString).abbreviatingWithTildeInPath))
-        saveMenu.addItem(ActionMenuItem("在访达中打开") {
-            let folder = Settings.saveFolder
-            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            NSWorkspace.shared.open(folder)
-        })
-        saveMenu.addItem(ActionMenuItem("更改位置…") { [weak self] in self?.chooseFolder() })
-        if Settings.saveFolder != Settings.defaultSaveFolder {
-            saveMenu.addItem(ActionMenuItem("恢复默认（图片/MacKit）") { Settings.saveFolder = Settings.defaultSaveFolder })
-        }
-        let saveItem = NSMenuItem(title: "截图保存位置", action: nil, keyEquivalent: "")
-        saveItem.submenu = saveMenu
-        items.append(saveItem)
-        return items
-    }
-
-    private func chooseFolder() {
-        NSApp.activate(ignoringOtherApps: true)
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "就存这里"
-        panel.directoryURL = Settings.saveFolder
-        panel.begin { response in
-            MainActor.assumeIsolated {
-                if response == .OK, let url = panel.url { Settings.saveFolder = url }
-            }
-        }
-    }
 }
 
 /// 延时截图的倒数：屏幕中间 3、2、1，倒数时按 Esc 取消（你在别的软件里，所以 Esc 临时注册成全局快捷键）

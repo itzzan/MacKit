@@ -31,24 +31,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let screenPen = ScreenPenTool()
     private lazy var modules: [ToolModule] = [status, screenshot, longShot, pin, clipboard, recorder, ocr, measure,
                                               keepAwake, windowTips, beautify, screenPen]
-    /// 菜单分组（台阶 10）：每组一个小标题，常用操作放第一层，设置收进这一组最后的"设置"子菜单
+    /// 菜单分组（台阶 10）：每组一个小标题，常用操作放第一层；不常改的设置台阶 17 起都在设置窗口里
     private struct MenuGroup {
         let title: String
         let modules: [ToolModule]
-        let settingsTitle: String?
     }
     private lazy var menuGroups: [MenuGroup] = [
-        MenuGroup(title: "系统状态（点一下打开活动监视器）", modules: [status], settingsTitle: nil),
-        MenuGroup(title: "截图", modules: [screenshot, longShot, pin], settingsTitle: "截图设置"),
-        MenuGroup(title: "录屏", modules: [recorder], settingsTitle: "录屏设置"),
-        MenuGroup(title: "剪贴板", modules: [clipboard], settingsTitle: "剪贴板设置"),
-        MenuGroup(title: "识别", modules: [ocr, measure], settingsTitle: "识别设置"),
-        MenuGroup(title: "小工具", modules: [keepAwake, screenPen, windowTips], settingsTitle: nil),
+        MenuGroup(title: "系统状态（点一下打开活动监视器）", modules: [status]),
+        MenuGroup(title: "截图", modules: [screenshot, longShot, pin]),
+        MenuGroup(title: "录屏", modules: [recorder]),
+        MenuGroup(title: "剪贴板", modules: [clipboard]),
+        MenuGroup(title: "识别", modules: [ocr, measure]),
+        MenuGroup(title: "小工具", modules: [keepAwake, screenPen, windowTips]),
     ]
     /// 菜单栏图标：录屏中显示红点和时长（优先），防休眠时是咖啡杯，平常是扳手
     private var recordingText: String?
     private var keepAwakeOn = false
     private var welcome: WelcomeWindow?
+    private var settingsWindow: SettingsWindow?
+    private let updateChecker = UpdateChecker()
     private(set) var emergencyQuitRegistered = false
 
     init(selfTest: Bool) {
@@ -68,6 +69,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if CommandLine.arguments.contains("--welcome-preview") {
             StylePreview.runWelcome(arguments: CommandLine.arguments)
+            return
+        }
+        if CommandLine.arguments.contains("--settings-preview") {
+            StylePreview.runSettings(arguments: CommandLine.arguments)
             return
         }
         if CommandLine.arguments.contains("--style-preview") {
@@ -138,7 +143,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         if selfTest {
-            SelfTest.run(statusItem: item, screenshot: screenshot, pin: pin, recorder: recorder, emergencyQuit: emergencyQuitRegistered)
+            SelfTest.run(statusItem: item, screenshot: screenshot, pin: pin, recorder: recorder, emergencyQuit: emergencyQuitRegistered,
+                         settingsHooks: settingsHooks(dryRun: true))
         }
     }
 
@@ -180,6 +186,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         w.show()
     }
 
+    /// 设置窗口要用的外面的东西
+    func settingsHooks(dryRun: Bool = false) -> SettingsHooks {
+        var hooks = SettingsHooks()
+        hooks.reloadHotKeys = { [weak self] in self?.modules.forEach { $0.reloadHotKeys() } }
+        hooks.showWelcome = { [weak self] in self?.showWelcome() }
+        // 自检时绝不碰你真的剪贴板历史（自检自己换成临时的）
+        hooks.clearClipboard = dryRun ? {} : { [weak self] in self?.clipboard.store.clearUnpinned() }
+        hooks.clipboardCounts = { [weak self] in
+            let items = self?.clipboard.store.items ?? []
+            return (items.count, items.filter(\.pinned).count)
+        }
+        hooks.openIgnoreList = { [weak self] in self?.clipboard.openIgnoreList() }
+        hooks.updateChecker = updateChecker
+        hooks.dryRun = dryRun
+        return hooks
+    }
+
+    /// 设置窗口（台阶 17）：菜单最下面"设置…"、菜单开着时 ⌘,
+    func showSettings(_ pane: SettingsWindow.Pane? = nil) {
+        if let settingsWindow { settingsWindow.show(pane); return }
+        let w = SettingsWindow(hooks: settingsHooks())
+        w.onClose = { [weak self] in self?.settingsWindow = nil }
+        settingsWindow = w
+        w.show(pane)
+    }
+
+    /// 菜单"关于 MacKit → 检查更新…"：只有点的这一下问 GitHub
+    private func checkForUpdate() {
+        Toast.show("正在问 GitHub 有没有新版本…")
+        Task { @MainActor in
+            let result = await updateChecker.check()
+            if case .newer(_, _, let page) = result {
+                Toast.showActions(UpdateChecker.summary(result), actions: [("去下载", { NSWorkspace.shared.open(page) })])
+            } else {
+                Toast.show(UpdateChecker.summary(result), seconds: 3)
+            }
+        }
+    }
+
     func menuWillOpen(_ menu: NSMenu) { status.menuOpened() }
     func menuDidClose(_ menu: NSMenu) { status.menuClosed() }
 
@@ -188,21 +233,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.removeAllItems()
         for group in menuGroups {
             let actions = group.modules.flatMap { $0.menuItems() }
-            let settings = group.modules.map { $0.settingsItems() }.filter { !$0.isEmpty }
             guard !actions.isEmpty else { continue }
             if !menu.items.isEmpty { menu.addItem(.separator()) }
             menu.addItem(.sectionHeader(title: group.title))
             for item in actions { menu.addItem(item) }
-            if let title = group.settingsTitle, !settings.isEmpty {
-                let sub = NSMenu()
-                for (i, part) in settings.enumerated() {
-                    if i > 0 { sub.addItem(.separator()) }
-                    for item in part { sub.addItem(item) }
-                }
-                let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-                item.submenu = sub
-                menu.addItem(item)
-            }
         }
         menu.addItem(.separator())
         if !ScreenPermission.isGranted { menu.addItem(ScreenPermission.menuItem()) }     // 没开权限时第一层就提醒
@@ -210,13 +244,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         about.addItem(.info("MacKit \(AppInfo.version)"))
         about.addItem(ActionMenuItem("使用说明（权限、快捷键）…") { [weak self] in self?.showWelcome() })
         about.addItem(ActionMenuItem("打开项目主页") { NSWorkspace.shared.open(AppLinks.home) })
-        about.addItem(ActionMenuItem("看看有没有新版本") { NSWorkspace.shared.open(AppLinks.releases) })
+        about.addItem(ActionMenuItem("检查更新…") { [weak self] in self?.checkForUpdate() })
         about.addItem(.separator())
         about.addItem(ScreenPermission.menuItem())
         if emergencyQuitRegistered { about.addItem(.info("卡住时按 \(EmergencyHotKey.quit.display) 紧急退出")) }
         let aboutItem = NSMenuItem(title: "关于 MacKit", action: nil, keyEquivalent: "")
         aboutItem.submenu = about
         menu.addItem(aboutItem)
+        menu.addItem(ActionMenuItem("设置…", key: ",", modifiers: .command) { [weak self] in self?.showSettings() })
         menu.addItem(ActionMenuItem("退出 MacKit", key: "q", modifiers: .command) { NSApp.terminate(nil) })
     }
 }

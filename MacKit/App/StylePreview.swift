@@ -32,6 +32,34 @@ enum StylePreview {
         exit(0)
     }
 
+    /// 设置窗口五页各画一张图（不弹窗口、不改设置）：--settings-preview 输出前缀 [dark] → 前缀-通用.png …
+    static func runSettings(arguments: [String]) {
+        guard let i = arguments.firstIndex(of: "--settings-preview"), arguments.indices.contains(i + 1) else { exit(2) }
+        let dark = arguments.contains("dark")
+        var hooks = SettingsHooks()
+        hooks.dryRun = true
+        let settings = SettingsWindow(hooks: hooks)
+        for pane in SettingsWindow.Pane.allCases {
+            guard let view = settings.panes[pane]?.view else { exit(1) }
+            view.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            view.setFrameSize(view.fittingSize)
+            view.layoutSubtreeIfNeeded()
+            view.displayIfNeeded()
+            guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { exit(1) }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            guard let image = rep.cgImage, let space = CGColorSpace(name: CGColorSpace.sRGB),
+                  let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { exit(1) }
+            ctx.setFillColor((dark ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 0.93, alpha: 1)).cgColor)
+            ctx.fill(CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            let path = "\(arguments[i + 1])-\(pane.title).png"
+            guard let out = ctx.makeImage(), write(out, to: path) else { exit(1) }
+            print("设置 \(pane.title)：\(path)　\(out.width)×\(out.height)")
+        }
+        exit(0)
+    }
+
     static func run(arguments: [String]) {
         guard let i = arguments.firstIndex(of: "--style-preview"), arguments.indices.contains(i + 2) else { exit(2) }
         let out = arguments[i + 1], label = arguments[i + 2]

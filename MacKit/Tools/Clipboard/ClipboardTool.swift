@@ -54,8 +54,8 @@ final class ClipboardTool: ToolModule {
 
     private func registerHotKey() {
         if let id = hotKeyID { HotKeyCenter.shared.unregister(id) }
-        hotKeyID = HotKeyCenter.shared.register(Settings.clipboardHotKey) { [weak self] in self?.togglePanel() }
-        hotKeyRegistered = hotKeyID != nil
+        hotKeyID = Settings.clipboardHotKey.flatMap { HotKeyCenter.shared.register($0) { [weak self] in self?.togglePanel() } }
+        hotKeyRegistered = Settings.clipboardHotKey == nil || hotKeyID != nil
     }
 
     // MARK: 小窗口
@@ -120,15 +120,15 @@ final class ClipboardTool: ToolModule {
         let combo = Settings.clipboardHotKey
         var items: [NSMenuItem] = []
         items.append(ActionMenuItem("剪贴板历史（\(store.items.count) 条）",
-                                    key: hotKeyRegistered ? combo.menuKey : "",
-                                    modifiers: combo.menuModifiers) { [weak self] in
+                                    key: hotKeyRegistered ? (combo?.menuKey ?? "") : "",
+                                    modifiers: combo?.menuModifiers ?? []) { [weak self] in
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(0.15))           // 等菜单收起
                 self?.togglePanel()
             }
         })
         if !hotKeyRegistered {
-            items.append(.info("⚠︎ 快捷键 \(combo.display) 没注册上，可能被别的软件占用，换一个试试"))
+            items.append(.info("⚠︎ 快捷键 \(combo?.display ?? "") 没注册上，可能被别的软件占用，在「设置 → 快捷键」里换一个"))
         }
         // 连续粘贴（台阶 14）
         if queue.isActive {
@@ -163,30 +163,4 @@ final class ClipboardTool: ToolModule {
         return items
     }
 
-    func settingsItems() -> [NSMenuItem] {
-        let combo = Settings.clipboardHotKey
-        var items: [NSMenuItem] = []
-        let pause = ActionMenuItem("暂停记录") { Settings.clipboardPaused.toggle() }
-        pause.state = Settings.clipboardPaused ? .on : .off
-        items.append(pause)
-        if store.unpinnedCount > 0 {
-            items.append(ActionMenuItem("清空历史（保留收藏的）") { [weak self] in self?.store.clearUnpinned() })
-        }
-        items.append(ActionMenuItem("不记录这些软件…（\(ClipboardIgnoreList.ids.count) 个）") { [weak self] in self?.openIgnoreList() })
-        if ClipboardPaster.canAutoPaste { items.append(.info("自动粘贴：已开启")) }
-
-        let keyMenu = NSMenu()
-        for (index, preset) in ClipboardHotKeyPresets.all.enumerated() {
-            let item = ActionMenuItem("\(preset.display)　\(preset.note)") { [weak self] in
-                Settings.clipboardHotKeyIndex = index
-                self?.registerHotKey()
-            }
-            item.state = index == Settings.clipboardHotKeyIndex ? .on : .off
-            keyMenu.addItem(item)
-        }
-        let keyItem = NSMenuItem(title: "剪贴板快捷键：\(combo.display)", action: nil, keyEquivalent: "")
-        keyItem.submenu = keyMenu
-        items.append(keyItem)
-        return items
-    }
 }

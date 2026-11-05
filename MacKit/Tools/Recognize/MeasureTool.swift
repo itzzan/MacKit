@@ -244,10 +244,8 @@ final class MeasureTool: ToolModule {
 
     private func registerHotKey() {
         if let id = hotKeyID { HotKeyCenter.shared.unregister(id) }
-        hotKeyID = HotKeyCenter.shared.register(RecognizeHotKeyPresets.measure[Settings.measureHotKeyIndex]) { [weak self] in
-            self?.start()
-        }
-        hotKeyRegistered = hotKeyID != nil
+        hotKeyID = Settings.hotKey(.measure).flatMap { HotKeyCenter.shared.register($0) { [weak self] in self?.start() } }
+        hotKeyRegistered = Settings.hotKey(.measure) == nil || hotKeyID != nil
     }
 
     func start(delay: Double = 0) {
@@ -278,31 +276,14 @@ final class MeasureTool: ToolModule {
     }
 
     func menuItems() -> [NSMenuItem] {
-        let combo = RecognizeHotKeyPresets.measure[Settings.measureHotKeyIndex]
+        let combo = Settings.hotKey(.measure)
         var items: [NSMenuItem] = []
-        items.append(ActionMenuItem("测量（自动量宽高、拖框量大小）", key: hotKeyRegistered ? combo.menuKey : "",
-                                    modifiers: combo.menuModifiers) { [weak self] in self?.start(delay: 0.2) })
+        items.append(ActionMenuItem("测量（自动量宽高、拖框量大小）", key: hotKeyRegistered ? (combo?.menuKey ?? "") : "",
+                                    modifiers: combo?.menuModifiers ?? []) { [weak self] in self?.start(delay: 0.2) })
         if !hotKeyRegistered {
-            items.append(.info("⚠︎ 快捷键 \(combo.display) 没注册上，可能被别的软件占用，换一个试试"))
+            items.append(.info("⚠︎ 快捷键 \(combo?.display ?? "") 没注册上，可能被别的软件占用，在「设置 → 快捷键」里换一个"))
         }
         return items
     }
 
-    func settingsItems() -> [NSMenuItem] {
-        let combo = RecognizeHotKeyPresets.measure[Settings.measureHotKeyIndex]
-        var items: [NSMenuItem] = []
-        let keyMenu = NSMenu()
-        for (index, preset) in RecognizeHotKeyPresets.measure.enumerated() {
-            let item = ActionMenuItem("\(preset.display)　\(preset.note)") { [weak self] in
-                Settings.measureHotKeyIndex = index
-                self?.registerHotKey()
-            }
-            item.state = index == Settings.measureHotKeyIndex ? .on : .off
-            keyMenu.addItem(item)
-        }
-        let keyItem = NSMenuItem(title: "测量快捷键：\(combo.display)", action: nil, keyEquivalent: "")
-        keyItem.submenu = keyMenu
-        items.append(keyItem)
-        return items
-    }
 }

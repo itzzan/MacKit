@@ -18,12 +18,12 @@ enum SelfTest {
     private static func info(_ text: String) { print("INFO", text) }
 
     static func run(statusItem: NSStatusItem, screenshot: ScreenshotTool, pin: PinTool, recorder: RecorderTool,
-                    emergencyQuit: Bool) {
+                    emergencyQuit: Bool, settingsHooks: SettingsHooks) {
         check(statusItem.button?.image != nil, "菜单栏图标已创建")
         check(emergencyQuit, "紧急退出快捷键 \(EmergencyHotKey.quit.display) 已注册")
-        info("截图快捷键 \(Settings.screenshotHotKey.display) 注册\(screenshot.hotKeyRegistered ? "成功" : "失败")")
-        if let rival = Settings.screenshotHotKey.runningRival { info("\(rival) 正开着，也在用这个快捷键") }
-        info("贴图快捷键 \(Settings.pinHotKeys.pin.display) / \(Settings.pinHotKeys.toggle.display) 注册\(pin.hotKeysRegistered ? "成功" : "失败")")
+        info("截图快捷键 \(Settings.screenshotHotKey?.display ?? "没设") 注册\(screenshot.hotKeyRegistered ? "成功" : "失败")")
+        if let rival = Settings.screenshotHotKey?.runningRival { info("\(rival) 正开着，也在用这个快捷键") }
+        info("贴图快捷键 \(Settings.pinHotKey?.display ?? "没设") / \(Settings.pinToggleHotKey?.display ?? "没设") 注册\(pin.hotKeysRegistered ? "成功" : "失败")")
         info("屏幕录制权限：\(ScreenPermission.isGranted ? "已开启" : "未开启")（直接从终端运行时，这里查的是终端的权限）")
 
         if let menu = statusItem.menu {
@@ -59,6 +59,7 @@ enum SelfTest {
         testMenuLayout(statusItem.menu)
         testIconAndWindows()
         testRelease(statusItem.menu)
+        testSettingsWindow(hooks: settingsHooks, menu: statusItem.menu)
 
         print(failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED (\(failures))")
         exit(failures == 0 ? 0 : 1)
@@ -1149,7 +1150,7 @@ enum SelfTest {
         hud.setPenOn(true)
         check(hud.buttons["pen"]?.isSelectedLook == true && hud.buttons["pen"]?.toolTip?.contains("⌃⇧D") == true,
               "录制小条上有\u{201C}画笔\u{201D}按钮，开着时亮")
-        let free = HotKeyCenter.shared.register(ScreenPenHotKey.combo) {}
+        let free = HotKeyCenter.shared.register(ScreenPenHotKey.standard) {}
         check(free != nil, "平时不占 ⌃⇧D（只在录屏或开着屏幕画笔时才注册）")
         if let free { HotKeyCenter.shared.unregister(free) }
 
@@ -1253,7 +1254,6 @@ enum SelfTest {
         ignoreWindow.table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
         ignoreWindow.removeSelected()
         check(ClipboardIgnoreList.ids == ["com.apple.keychainaccess"] && ignoreWindow.ids.count == 1, "名单小窗口里删掉一个")
-        check(tool.settingsItems().contains { $0.title.hasPrefix("不记录这些软件…") }, "剪贴板设置里有\u{201C}不记录这些软件…\u{201D}")
         if let front = ClipboardIgnoreList.frontApp?.localizedName {
             check(tool.menuItems().contains { $0.title.contains("「\(front)」") }, "菜单里一键\u{201C}不记「\(front)」\u{201D}")
         }
@@ -1308,15 +1308,11 @@ enum SelfTest {
     // MARK: 录屏（台阶 5）。真的录屏要弹系统窗口、占屏幕，不在这里做；这里测"录哪里、怎么录"算得对不对
 
     private static func testRecorder(_ tool: RecorderTool) {
-        check(tool.state == .idle && tool.hotKeyRegistered, "录屏快捷键 \(Settings.recordHotKey.display) 已注册，平时是空闲状态")
+        check(tool.state == .idle && tool.hotKeyRegistered, "录屏快捷键 \(Settings.recordHotKey?.display ?? "没设") 已注册，平时是空闲状态")
         check(Bundle.main.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") != nil,
               "App 里写明了麦克风用途（没写的话一要麦克风权限就会闪退）")
         let titles = tool.menuItems().map(\.title)
-        let settingTitles = tool.settingsItems().map(\.title)
-        check(titles.contains { $0.hasPrefix("录屏（") } && settingTitles.contains { $0.hasPrefix("画质：") }
-              && settingTitles.contains("录完自动打开预览") && settingTitles.contains("更改保存位置…")
-              && settingTitles.contains { $0.hasPrefix("快捷键 ") },
-              "菜单里有录屏，录屏设置里有画质、保存位置、快捷键、录完自动打开预览")
+        check(titles.contains { $0.hasPrefix("录屏（") }, "菜单里有录屏（画质、保存位置、录完打开预览在设置窗口的录屏页）")
 
         // 选区 → 录哪里
         guard let screen = NSScreen.main else { check(false, "有屏幕"); return }
@@ -1924,17 +1920,16 @@ enum SelfTest {
         let rows = menu.items.filter { !$0.isSeparatorItem }
         // 第二版加了"识别并翻译""开始连续粘贴""不记「当前软件」"；自检环境里还多两行提醒（录屏权限、自动粘贴没开）
         check(rows.count <= 32, "菜单第一层 \(rows.count) 行（整理前 40 多行；你那边没有那两行提醒）")
-        func sub(_ title: String) -> [String] { menu.items.first { $0.title == title }?.submenu.map(allTitles) ?? [] }
-        let shot = sub("截图设置")
-        check(shot.contains { $0.hasPrefix("截图快捷键") } && shot.contains("截图保存位置") && shot.contains { $0.hasPrefix("贴图快捷键") }
-              && shot.contains { $0.hasPrefix("快速模式") } && shot.contains { $0.hasPrefix("截图时按 C") }, "截图设置里有截图、贴图的快捷键和保存位置")
-        check(sub("录屏设置").contains { $0.hasPrefix("画质") } && sub("剪贴板设置").contains { $0.hasPrefix("剪贴板快捷键") }
-              && sub("剪贴板设置").contains("暂停记录") && sub("识别设置").contains { $0.hasPrefix("识别文字快捷键") }
-              && sub("识别设置").contains { $0.hasPrefix("测量快捷键") }, "录屏、剪贴板、识别的设置都收进各自的\u{201C}设置\u{201D}子菜单")
+        // 台阶 17：各组的"X设置"子菜单都收进设置窗口，菜单最下面只留"设置…"
+        let oldSubs = ["截图设置", "录屏设置", "剪贴板设置", "识别设置"].filter { t in menu.items.contains { $0.title == t } }
+        check(oldSubs.isEmpty, "菜单里没有\u{201C}截图设置\u{201D}\u{201C}录屏设置\u{201D}这些子菜单了\(oldSubs.isEmpty ? "" : "（还有：\(oldSubs.joined(separator: "、"))）")")
+        let tail = menu.items.suffix(2)
+        check(tail.first?.title == "设置…" && tail.first?.keyEquivalent == "," && tail.first?.keyEquivalentModifierMask == .command
+              && tail.last?.title == "退出 MacKit", "菜单最下面：设置…（⌘,）、退出 MacKit")
         let everything = allTitles(menu)
         let mustHave = ["截取整个屏幕", "长截图（框选后往下滚，拼成一张长图）", "延时截图", "3 秒后截图", "贴图（剪贴板里的图片或文字）",
                         "录屏（框选 / 单击窗口 / 整屏）", "识别文字（框选）", "测量（自动量宽高、拖框量大小）", "排窗口（系统自带的快捷键）",
-                        "30 分钟", "截图保存位置", "录完自动打开预览", "关于 MacKit", "退出 MacKit"]
+                        "30 分钟", "关于 MacKit", "设置…", "退出 MacKit"]
         let missing = mustHave.filter { !everything.contains($0) }
         check(missing.isEmpty && everything.contains { $0.hasPrefix("剪贴板历史（") } && everything.contains { $0.hasPrefix("MacKit ") }
               && everything.contains { $0.hasPrefix("屏幕录制权限") },
@@ -1991,7 +1986,9 @@ enum SelfTest {
         check(HotKeyPresets.screenshot[0].display == "⌘1" && !HotKeyPresets.screenshot[0].note.contains("你的"),
               "老用户的第一个选项还是 ⌘1，说明文字不再写\u{201C}你的 Snipaste\u{201D}")
 
-        // 欢迎窗口（不显示）：选一套 → 六个快捷键一起换；测完换回原样
+        // 欢迎窗口（不显示）：选一套 → 六个快捷键一起换；测完换回原样（台阶 17 起还有各自改过的键位）
+        let savedDefaults = snapshotDefaults()
+        defer { restoreDefaults(savedDefaults) }
         let saved = [Settings.screenshotHotKeyIndex, Settings.pinHotKeyIndex, Settings.clipboardHotKeyIndex,
                      Settings.recordHotKeyIndex, Settings.ocrHotKeyIndex, Settings.measureHotKeyIndex]
         defer {
@@ -2005,21 +2002,265 @@ enum SelfTest {
               && welcome.permissionRows["screen"]?.button != nil && welcome.permissionRows["media"]?.button == nil,
               "欢迎窗口：屏幕录制、辅助功能各有\u{201C}去打开\u{201D}，麦克风摄像头只是说明；两套快捷键可选")
         welcome.choose(.control)
-        check(Settings.hotKeyScheme == .control && Settings.screenshotHotKey.display == "⌃⇧1" && changed == [.control]
+        check(Settings.hotKeyScheme == .control && Settings.screenshotHotKey?.display == "⌃⇧1" && changed == [.control]
               && welcome.schemeButtons[.control]?.state == .on, "欢迎窗口里选 ⌃⇧ 那套：六个快捷键一起换，各积木重新注册")
         welcome.choose(.command)
         check(Settings.hotKeyScheme == .command && Settings.measureHotKeyIndex == 0, "再换回 ⌘ 那套")
         Settings.clipboardHotKeyIndex = 1
         check(Settings.hotKeyScheme == nil, "单独改过某一个快捷键：哪套都不算，欢迎窗口里两个都不选")
+        welcome.choose(.command)
+        Settings.setHotKey(HotKeyCombo(keyCode: 40, modifiers: [.control, .option, .shift]), for: .ocr)
+        check(Settings.hotKeyScheme == nil, "在设置窗口里随便按了一个：也是哪套都不算")
+        welcome.choose(.command)
+        check(Settings.hotKeyScheme == .command && !Settings.isCustomHotKey(.ocr), "再选一套：各自改过的也一起换回这一套")
+        welcome.dryRun = true
+        let launchBefore = LaunchAtLogin.status
+        check(welcome.launchBox.title.hasPrefix("开机自动启动") && welcome.launchBox.isOn == LaunchAtLogin.isOn,
+              "欢迎窗口里有\u{201C}开机自动启动\u{201D}的勾，照系统的实情显示（新用户默认不勾）")
+        welcome.launchBox.toggleForTest()
+        check(LaunchAtLogin.status == launchBefore, "自检里点了欢迎窗口的勾，也不真的去加登录项")
         welcome.window.close()
 
         // 关于菜单
         let aboutTitles = menu?.items.first { $0.title == "关于 MacKit" }?.submenu?.items.map(\.title) ?? []
-        check(aboutTitles.contains("使用说明（权限、快捷键）…") && aboutTitles.contains("打开项目主页") && aboutTitles.contains("看看有没有新版本")
+        check(aboutTitles.contains("使用说明（权限、快捷键）…") && aboutTitles.contains("打开项目主页") && aboutTitles.contains("检查更新…")
+              && !aboutTitles.contains("看看有没有新版本")
               && AppLinks.home.absoluteString == "https://github.com/itzzan/MacKit" && AppLinks.releases.path == "/itzzan/MacKit/releases",
-              "关于 MacKit：使用说明、项目主页、看看有没有新版本")
+              "关于 MacKit：使用说明、项目主页、检查更新…")
         let parts = AppInfo.version.split(separator: ".").compactMap { Int($0) }
         check(parts.count == 3 && parts[0] >= 1, "版本号是三段数字、1 以上：\(AppInfo.version)")
+    }
+
+    // MARK: 台阶 17 设置窗口
+
+    /// MacKit 自己的设置全拍一份（测完改回去，你的设置一点不动）
+    private static func snapshotDefaults() -> [String: Any] {
+        UserDefaults.standard.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "") ?? [:]
+    }
+
+    private static func restoreDefaults(_ before: [String: Any]) {
+        let after = snapshotDefaults()
+        for key in Set(before.keys).union(after.keys) where (before[key] as? NSObject) != (after[key] as? NSObject) {
+            if let v = before[key] { UserDefaults.standard.set(v, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+    }
+
+    /// 在一页里按名字找按钮
+    private static func button(_ title: String, in view: NSView) -> NSButton? {
+        if let b = view as? NSButton, b.title == title { return b }
+        for sub in view.subviews { if let b = button(title, in: sub) { return b } }
+        return nil
+    }
+
+    /// 假的 GitHub 回答
+    private final class FakeReply: @unchecked Sendable {
+        var data: Data?
+        var asked: [URL] = []
+    }
+
+    private static func release(_ tag: String) -> Data {
+        try! JSONSerialization.data(withJSONObject: ["tag_name": tag, "body": "  新东西：设置窗口  ",
+                                                     "html_url": "https://github.com/itzzan/MacKit/releases/tag/\(tag)"])
+    }
+
+    private static func testSettingsWindow(hooks appHooks: SettingsHooks, menu: NSMenu?) {
+        let savedDefaults = snapshotDefaults()
+        let wasCustom = HotKeyAction.allCases.map(Settings.isCustomHotKey)
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("MacKitSettings-\(UUID().uuidString)")
+        let pb = NSPasteboard(name: NSPasteboard.Name("local.mackit.selftest.settings.\(UUID().uuidString)"))
+        defer {
+            restoreDefaults(savedDefaults)
+            appHooks.reloadHotKeys()                       // 快捷键挂回测之前的样子
+            try? FileManager.default.removeItem(at: dir)
+            pb.releaseGlobally()
+        }
+
+        // 检查更新：用假的回答，不真的联网
+        let reply = FakeReply()
+        let checker = UpdateChecker { url in
+            reply.asked.append(url)
+            guard let d = reply.data else { throw URLError(.notConnectedToInternet) }
+            return d
+        }
+        reply.data = release("v1.0.0")
+        check(awaitResult(timeout: 3) { await checker.check(current: "1.6.0") } == .upToDate("1.6.0"), "检查更新：GitHub 上是 1.0.0、你是 1.6.0 → 已是最新")
+        check(reply.asked.first?.host == "api.github.com" && reply.asked.first?.path == "/repos/itzzan/MacKit/releases/latest",
+              "检查更新只问 GitHub 的\u{201C}最新发布\u{201D}，地址里不带你的任何东西")
+        reply.data = release("v2.0.0")
+        check(awaitResult(timeout: 3) { await checker.check(current: "1.6.0") }
+              == .newer(version: "2.0.0", notes: "新东西：设置窗口", page: URL(string: "https://github.com/itzzan/MacKit/releases/tag/v2.0.0")!),
+              "检查更新：GitHub 上有 v2.0.0 → 有新版，带上更新说明和下载页")
+        reply.data = Data("不是 JSON".utf8)
+        check(awaitResult(timeout: 3) { await checker.check(current: "1.6.0") } == .failed("GitHub 的回答看不懂，等会儿再试"), "检查更新：回答看不懂 → 说等会儿再试")
+        reply.data = nil
+        check(awaitResult(timeout: 3) { await checker.check(current: "1.6.0") } == .failed("连不上 GitHub，等会儿再试"), "检查更新：连不上 → 连不上 GitHub，等会儿再试")
+        check(UpdateChecker.summary(.upToDate("1.6.0")) == "已是最新版本 1.6.0", "已是最新时写\u{201C}已是最新版本 1.6.0\u{201D}")
+
+        // 设置窗口（不显示）：用临时的剪贴板历史，不碰你真的
+        let store = ClipboardStore(directory: dir, limit: 50)
+        for t in ["第一条", "第二条", "收藏的这条"] {
+            pb.clearContents(); pb.setString(t, forType: .string)
+            if case .success(let snap) = ClipboardReader.read(pb, source: nil, ignoredApps: []) { _ = store.add(snap) }
+        }
+        if let fav = store.items.first { store.toggleFavorite(fav.id) }
+        HotKeyAction.allCases.forEach(Settings.resetHotKey)          // 从“都没单独改过”开始测（测完换回你的）
+        appHooks.reloadHotKeys()
+        var hooks = appHooks
+        var reloads = 0, welcomes = 0, ignores = 0
+        hooks.reloadHotKeys = { reloads += 1; appHooks.reloadHotKeys() }
+        hooks.showWelcome = { welcomes += 1 }
+        hooks.openIgnoreList = { ignores += 1 }
+        hooks.clearClipboard = { store.clearUnpinned() }
+        hooks.clipboardCounts = { (store.items.count, store.items.filter(\.pinned).count) }
+        hooks.updateChecker = checker
+        hooks.dryRun = true
+        let settings = SettingsWindow(hooks: hooks)
+        defer { settings.window.close() }
+        check(settings.tabs.tabViewItems.map(\.label) == ["通用", "快捷键", "截图", "录屏", "剪贴板"] && settings.tabs.tabStyle == .toolbar
+              && settings.tabs.tabViewItems.allSatisfy { $0.image != nil } && !settings.window.isVisible,
+              "设置窗口：上面一排图标分页——通用、快捷键、截图、录屏、剪贴板（自检不显示）")
+        for pane in SettingsWindow.Pane.allCases { _ = settings.panes[pane]?.view }        // 每页都建出来
+        settings.select(.record)
+        check(settings.tabs.selectedTabViewItemIndex == 3, "点\u{201C}录屏\u{201D}切到录屏页")
+
+        // 通用：开机启动只看状态、不真的去加；检查更新；权限；欢迎窗口
+        guard let general = settings.panes[.general] as? GeneralPane, let shortcuts = settings.panes[.shortcuts] as? ShortcutsPane,
+              let shot = settings.panes[.screenshot] as? ScreenshotPane, let record = settings.panes[.record] as? RecordPane,
+              let clip = settings.panes[.clipboard] as? ClipboardPane else { check(false, "设置窗口五页都在"); return }
+        let launchBefore = LaunchAtLogin.status
+        check(general.launchBox.isOn == LaunchAtLogin.isOn && general.launchStatus.stringValue == LaunchAtLogin.statusText
+              && general.approveButton.isHidden == !LaunchAtLogin.needsApproval,
+              "通用页：开机自动启动照系统的实情显示（现在：\(LaunchAtLogin.statusText)）")
+        general.launchBox.toggleForTest()
+        check(LaunchAtLogin.status == launchBefore, "自检里点了开机启动的勾，也不真的去加登录项")
+        general.reload()
+        reply.data = release("v9.0.0")
+        general.checkUpdate()
+        let deadline = Date().addingTimeInterval(3)
+        while !general.updateButton.isEnabled && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+        check(general.updateLabel.stringValue.hasPrefix("有新版本 9.0.0") && general.updateLabel.stringValue.contains("新东西")
+              && !general.downloadButton.isHidden, "通用页点\u{201C}检查更新\u{201D}：有新版时写版本号和更新说明，出现\u{201C}去下载\u{201D}")
+        general.showUpdate(.failed("连不上 GitHub，等会儿再试"))
+        check(general.updateLabel.stringValue == "连不上 GitHub，等会儿再试" && general.downloadButton.isHidden, "连不上时没有\u{201C}去下载\u{201D}")
+        check(general.permissionLabels.keys.sorted() == ["access", "camera", "mic", "screen"]
+              && general.permissionLabels["screen"]?.stringValue == (ScreenPermission.isGranted ? "已开启 ✓" : "未开启"),
+              "通用页：屏幕录制、辅助功能、麦克风、摄像头四种权限各自开没开")
+        button("再看一次欢迎窗口", in: general.view)?.performClick(nil)
+        check(welcomes == 1, "通用页：再看一次欢迎窗口")
+
+        // 快捷键：八个都在；录的时候先把 MacKit 自己的快捷键全摘掉
+        let k = HotKeyCombo(keyCode: 40, modifiers: [.control, .option, .shift])          // ⌃⌥⇧K，几乎没人用
+        check(shortcuts.fields.count == 8 && shortcuts.fields[.screenshot]?.title == Settings.hotKey(.screenshot)?.display
+              && shortcuts.fields[.screenPen]?.title == Settings.hotKey(.screenPen)?.display,
+              "快捷键页：截图、贴图、显示 / 隐藏贴图、剪贴板、录屏、识别文字、测量、屏幕画笔都在一张表里")
+        guard let shotField = shortcuts.fields[.screenshot], let recordField = shortcuts.fields[.record],
+              let measureField = shortcuts.fields[.measure], let clipField = shortcuts.fields[.clipboard] else { return }
+        shotField.startRecording(listen: false)
+        check(shotField.isRecording && shotField.title == "按下新的快捷键…" && HotKeyCenter.shared.isSuspended
+              && HotKeyCenter.shared.registeredCount == 0, "点一个快捷键：写着\u{201C}按下新的快捷键…\u{201D}，MacKit 自己的快捷键先全摘掉（按 ⌘1 不会截图）")
+        shotField.handle(keyCode: 1, modifiers: [])
+        check(shotField.isRecording && shortcuts.message.stringValue.hasPrefix("要带上"), "单按 S：不让设，说要带上 ⌘ ⌃ ⌥")
+        shotField.handle(keyCode: 1, modifiers: [.shift])
+        check(shotField.isRecording && shortcuts.message.stringValue.hasPrefix("要带上"), "⇧S 也不让设（打大写字母会被截走）")
+        shotField.handle(keyCode: 21, modifiers: [.shift, .command])
+        check(shotField.isRecording && shortcuts.message.stringValue.contains("系统截图"), "⇧⌘4：提醒是系统截图用的，换一个")
+        shotField.handle(keyCode: 12, modifiers: [.control, .option, .command])
+        check(shotField.isRecording && shortcuts.message.stringValue.contains("紧急退出"), "⌃⌥⌘Q：紧急退出固定不能占")
+        let before = reloads, old = Settings.hotKey(.screenshot)
+        shotField.handle(keyCode: 40, modifiers: [.control, .option, .shift])
+        check(!shotField.isRecording && Settings.hotKey(.screenshot) == k && shotField.title == "⌃⌥⇧K"
+              && !HotKeyCenter.shared.isSuspended && reloads == before + 1, "按 ⌃⌥⇧K：截图改成 ⌃⌥⇧K，录完把快捷键挂回去")
+        check(HotKeyCenter.shared.isRegistered(k) && !(old.map(HotKeyCenter.shared.isRegistered) ?? false),
+              "改完马上重新注册：⌃⌥⇧K 真的挂上了，原来的摘掉了（不用重开 MacKit）")
+        if let menu {
+            menu.delegate?.menuNeedsUpdate?(menu)
+            check(menu.items.contains { $0.keyEquivalent == "k" && $0.keyEquivalentModifierMask == [.control, .option, .shift] },
+                  "菜单里截图那一项右边跟着写 ⌃⌥⇧K")
+        }
+        check(shortcuts.resetButtons[.screenshot]?.isEnabled == true && shortcuts.resetButtons[.record]?.isEnabled == false,
+              "改过的那一行\u{201C}恢复默认\u{201D}能点，没改过的灰着")
+
+        recordField.startRecording(listen: false)
+        recordField.handle(keyCode: 40, modifiers: [.control, .option, .shift])
+        check(recordField.isRecording && shortcuts.message.stringValue.contains("截图") && Settings.hotKey(.record) != k,
+              "录屏也想设 ⌃⌥⇧K：不让设，说和截图撞了")
+        recordField.handle(keyCode: 53, modifiers: [])
+        check(!recordField.isRecording && !HotKeyCenter.shared.isSuspended && shortcuts.message.stringValue == "没改", "Esc：不改了")
+
+        clipField.startRecording(listen: false)
+        recordField.startRecording(listen: false)
+        check(!clipField.isRecording && recordField.isRecording && HotKeyCenter.shared.isSuspended, "同时只录一个：点了另一个，前一个算放弃")
+        settings.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+        check(!recordField.isRecording && !HotKeyCenter.shared.isSuspended, "切到别的窗口：正在录的算放弃，快捷键挂回去")
+
+        clipField.startRecording(listen: false)
+        clipField.handle(keyCode: 96, modifiers: [])
+        check(Settings.hotKey(.clipboard)?.display == "F5", "F5 可以单按")
+
+        measureField.startRecording(listen: false)
+        measureField.handle(keyCode: 51, modifiers: [])
+        check(Settings.hotKey(.measure) == nil && measureField.title == "未设置" && shortcuts.message.stringValue.contains("不要快捷键"),
+              "⌫ 清掉：测量不要快捷键了")
+        if let menu {
+            menu.delegate?.menuNeedsUpdate?(menu)
+            let item = menu.items.first { $0.title.hasPrefix("测量（") }
+            check(item != nil && item?.keyEquivalent == "", "清掉以后菜单里照样能点测量，只是右边没有快捷键")
+        }
+
+        shortcuts.resetButtons[.screenshot]?.performClick(nil)
+        check(!Settings.isCustomHotKey(.screenshot) && Settings.hotKey(.screenshot) == HotKeyAction.screenshot.presetCombo
+              && shotField.title == HotKeyAction.screenshot.presetCombo.display && shortcuts.resetButtons[.screenshot]?.isEnabled == false,
+              "截图\u{201C}恢复默认\u{201D}：变回原来的 \(HotKeyAction.screenshot.presetCombo.display)")
+        button("⌃⇧1–⌃⇧6", in: shortcuts.view)?.performClick(nil)
+        check(HotKeyAction.schemeActions.allSatisfy { Settings.hotKey($0) == $0.combo(in: .control) } && Settings.hotKeyScheme == .control
+              && shotField.title == "⌃⇧1" && measureField.title == "⌃⇧6", "一键套用 ⌃⇧1–⌃⇧6：七个一起换（清掉的测量也回来了）")
+        button("⌘1–⌘6", in: shortcuts.view)?.performClick(nil)
+        check(Settings.hotKeyScheme == .command && Settings.screenshotHotKeyIndex == 0 && shotField.title == "⌘1"
+              && HotKeyAction.schemeActions.allSatisfy { shortcuts.resetButtons[$0]?.isEnabled == false }, "一键套用 ⌘1–⌘6：全回到 ⌘1–⌘6 那套")
+
+        // 存法：没单独改过 = 照以前存的"第几个"；按出来和某个预设一样时带上它的说明
+        Settings.setHotKey(HotKeyCombo(keyCode: 18, modifiers: [.command]), for: .screenshot)
+        check(Settings.hotKey(.screenshot)?.rival?.name == "Snipaste" && Settings.hotKey(.screenshot)?.display == "⌘1",
+              "自己按出 ⌘1：还认得它和 Snipaste 抢同一个键")
+        Settings.resetHotKey(.screenshot)
+        Settings.screenshotHotKeyIndex = 0
+        check(Settings.hotKey(.screenshot)?.display == "⌘1", "没在设置窗口里改过：照以前选的那套（你这台 ⌘1–⌘6 一点不变）")
+        Settings.setHotKey(HotKeyCombo(keyCode: 2, modifiers: [.control, .option]), for: .screenPen)
+        check(Settings.hotKey(.screenPen)?.display == "⌃⌥D", "屏幕画笔也能改（⌃⌥D）")
+        Settings.resetHotKey(.screenPen)
+        check(Settings.hotKey(.screenPen)?.display == "⌃⇧D", "屏幕画笔恢复默认 ⌃⇧D")
+
+        // 截图、录屏、剪贴板三页：改了马上生效
+        let saveBefore = Settings.saveToFile, quickBefore = Settings.screenshotQuickMode
+        shot.saveBox.toggleForTest()
+        shot.quickBox.toggleForTest()
+        shot.colorPopup.selectItem(at: 1)
+        shot.colorPicked()
+        check(Settings.saveToFile == !saveBefore && Settings.screenshotQuickMode == !quickBefore && !Settings.colorAsHex,
+              "截图页：存不存文件、快速模式、取色复制成 RGB，点了马上改")
+        check(button("更改…", in: shot.view) != nil && button("在访达中打开", in: shot.view) != nil
+              && button("恢复默认", in: shot.view) != nil, "截图页：保存位置能改、能在访达中打开、能恢复默认")
+        record.qualityPopup.selectItem(at: 1)
+        record.qualityPicked()
+        let previewBefore = Settings.recordOpenPreview
+        record.previewBox.toggleForTest()
+        check(Settings.recordQuality == .hd30 && Settings.recordOpenPreview == !previewBefore && button("更改…", in: record.view) != nil,
+              "录屏页：画质、录完打开预览、保存位置")
+        clip.reload()
+        check(clip.countLabel.stringValue == "3 条，其中收藏 1 条" && clip.clearButton.isEnabled
+              && clip.ignoreLabel.stringValue == "\(ClipboardIgnoreList.ids.count) 个", "剪贴板页：历史几条、收藏几条、不记录的软件几个")
+        clip.clearButton.performClick(nil)
+        check(store.items.count == 1 && store.items.first?.pinned == true && clip.countLabel.stringValue == "1 条，其中收藏 1 条"
+              && !clip.clearButton.isEnabled, "剪贴板页：清空历史，收藏的留着")
+        let pausedBefore = Settings.clipboardPaused
+        clip.pauseBox.toggleForTest()
+        button("管理…", in: clip.view)?.performClick(nil)
+        check(Settings.clipboardPaused == !pausedBefore && ignores == 1, "剪贴板页：暂停记录、管理不记录的软件")
+        settings.window.close()
+
+        restoreDefaults(savedDefaults)
+        check(HotKeyAction.allCases.map(Settings.isCustomHotKey) == wasCustom && Settings.saveToFile == saveBefore
+              && Settings.clipboardPaused == pausedBefore, "测完设置窗口：快捷键和各项设置都换回测之前的样子")
     }
 
     private static func testTheme() {

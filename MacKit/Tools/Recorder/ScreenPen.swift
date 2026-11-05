@@ -147,7 +147,8 @@ final class ScreenPenPanel: NSPanel {
 
 /// 画笔快捷键 ⌃⇧D：只在录屏时、或开着屏幕画笔时注册
 enum ScreenPenHotKey {
-    static let combo = HotKeyCombo(keyCode: UInt32(kVK_ANSI_D), carbonModifiers: UInt32(controlKey | shiftKey), display: "⌃⇧D",
+    /// 默认的 ⌃⇧D；设置窗口里能改（台阶 17），用的时候读 Settings.hotKey(.screenPen)
+    static let standard = HotKeyCombo(keyCode: UInt32(kVK_ANSI_D), carbonModifiers: UInt32(controlKey | shiftKey), display: "⌃⇧D",
                                    menuKey: "d", menuModifiers: [.control, .shift], note: "屏幕画笔")
 }
 
@@ -174,7 +175,9 @@ final class ScreenPenTool: ToolModule {
         let s = ScreenPenSession(region: frame, present: present)
         s.onChange = { [weak self] on in if !on { self?.stop() } }
         session = s
-        if present { hotKeyID = HotKeyCenter.shared.register(ScreenPenHotKey.combo) { [weak self] in self?.stop() } }
+        if present, let combo = Settings.hotKey(.screenPen) {
+            hotKeyID = HotKeyCenter.shared.register(combo) { [weak self] in self?.stop() }
+        }
         s.begin()
     }
 

@@ -18,6 +18,10 @@ final class WelcomeWindow: NSObject, NSWindowDelegate {
     private(set) var schemeButtons: [HotKeyScheme: NSButton] = [:]
     private(set) var permissionRows: [String: (status: NSImageView, button: NSButton?)] = [:]
     private let summary = NSTextField(labelWithString: "")
+    /// 开机自动启动（台阶 17）：默认不勾
+    let launchBox = ClosureCheckbox(title: "开机自动启动 MacKit（以后在「设置… → 通用」里也能改）")
+    /// 自检时 true：勾了也不真的去加登录项
+    var dryRun = false
     private var timer: Timer?
 
     override init() {
@@ -59,7 +63,7 @@ final class WelcomeWindow: NSObject, NSWindowDelegate {
         icon.heightAnchor.constraint(equalToConstant: 64).isActive = true
         let title = NSTextField(labelWithString: "欢迎使用 MacKit \(AppInfo.version)")
         title.font = .systemFont(ofSize: 20, weight: .bold)
-        let subtitle = wrapping("截图、贴图、录屏、剪贴板历史、识别文字……都在屏幕右上角菜单栏的扳手图标里。所有东西都留在你的电脑上，MacKit 不联网。")
+        let subtitle = wrapping("截图、贴图、录屏、剪贴板历史、识别文字……都在屏幕右上角菜单栏的扳手图标里。所有东西都留在你的电脑上，MacKit 平时不联网（只有你点\u{201C}检查更新\u{201D}时问一下 GitHub）。")
         let head = NSStackView(views: [icon, vstack([title, subtitle], spacing: 4)])
         head.alignment = .centerY
         head.spacing = 14
@@ -83,7 +87,9 @@ final class WelcomeWindow: NSObject, NSWindowDelegate {
         }
         summary.font = Theme.number(Theme.bodySize, .regular)
         summary.textColor = .secondaryLabelColor
-        let later = small("以后在菜单每一组的「设置」里还能单独改；QQ、Snipaste 这类软件开着时，可能会和它们抢同一个快捷键")
+        let later = small("以后在菜单最下面的「设置…」里还能一个一个随便改；QQ、Snipaste 这类软件开着时，可能会和它们抢同一个快捷键")
+        launchBox.handler = { [weak self] _ in self?.launchToggled() }
+        launchBox.isOn = LaunchAtLogin.isOn                  // 默认不勾（拍板）；以前在设置里勾过的照实显示
 
         let foot = small("卡住时按 ⌃⌥⌘Q 紧急退出　·　这个窗口以后在菜单「关于 MacKit → 使用说明」里还能打开")
         let start = NSButton(title: "开始使用", target: self, action: #selector(finish))
@@ -95,13 +101,20 @@ final class WelcomeWindow: NSObject, NSWindowDelegate {
         foot.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         let stack = vstack([head, section("1　打开权限"), screen, access, media,
-                            section("2　选一套快捷键"), vstack(radios, spacing: 6), summary, later, footRow], spacing: 12)
+                            section("2　选一套快捷键"), vstack(radios, spacing: 6), summary, later,
+                            section("3　要不要开机自动启动"), launchBox, footRow], spacing: 12)
         stack.setCustomSpacing(20, after: head)
         stack.setCustomSpacing(20, after: media)
         stack.setCustomSpacing(20, after: later)
+        stack.setCustomSpacing(20, after: launchBox)
         stack.edgeInsets = NSEdgeInsets(top: 36, left: 28, bottom: 22, right: 28)
         stack.widthAnchor.constraint(equalToConstant: 600).isActive = true
         return stack
+    }
+
+    private func launchToggled() {
+        guard !dryRun else { return }
+        do { try LaunchAtLogin.set(launchBox.isOn) } catch { launchBox.isOn = LaunchAtLogin.isOn }
     }
 
     private func permissionRow(key: String, title: String, detail: String, action: (@MainActor () -> Void)?) -> NSView {

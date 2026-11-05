@@ -15,10 +15,8 @@ final class OCRTool: ToolModule {
 
     private func registerHotKey() {
         if let id = hotKeyID { HotKeyCenter.shared.unregister(id) }
-        hotKeyID = HotKeyCenter.shared.register(RecognizeHotKeyPresets.ocr[Settings.ocrHotKeyIndex]) { [weak self] in
-            self?.choose()
-        }
-        hotKeyRegistered = hotKeyID != nil
+        hotKeyID = Settings.hotKey(.ocr).flatMap { HotKeyCenter.shared.register($0) { [weak self] in self?.choose() } }
+        hotKeyRegistered = Settings.hotKey(.ocr) == nil || hotKeyID != nil
     }
 
     /// translate = true：菜单里"识别并翻译"，框完直接出译文（台阶 15）
@@ -80,32 +78,15 @@ final class OCRTool: ToolModule {
     }
 
     func menuItems() -> [NSMenuItem] {
-        let combo = RecognizeHotKeyPresets.ocr[Settings.ocrHotKeyIndex]
+        let combo = Settings.hotKey(.ocr)
         var items: [NSMenuItem] = []
-        items.append(ActionMenuItem("识别文字（框选）", key: hotKeyRegistered ? combo.menuKey : "",
-                                    modifiers: combo.menuModifiers) { [weak self] in self?.choose(delay: 0.2) })
+        items.append(ActionMenuItem("识别文字（框选）", key: hotKeyRegistered ? (combo?.menuKey ?? "") : "",
+                                    modifiers: combo?.menuModifiers ?? []) { [weak self] in self?.choose(delay: 0.2) })
         items.append(ActionMenuItem("识别并翻译（框选）") { [weak self] in self?.choose(delay: 0.2, translate: true) })
         if !hotKeyRegistered {
-            items.append(.info("⚠︎ 快捷键 \(combo.display) 没注册上，可能被别的软件占用，换一个试试"))
+            items.append(.info("⚠︎ 快捷键 \(combo?.display ?? "") 没注册上，可能被别的软件占用，在「设置 → 快捷键」里换一个"))
         }
         return items
     }
 
-    func settingsItems() -> [NSMenuItem] {
-        let combo = RecognizeHotKeyPresets.ocr[Settings.ocrHotKeyIndex]
-        var items: [NSMenuItem] = []
-        let keyMenu = NSMenu()
-        for (index, preset) in RecognizeHotKeyPresets.ocr.enumerated() {
-            let item = ActionMenuItem("\(preset.display)　\(preset.note)") { [weak self] in
-                Settings.ocrHotKeyIndex = index
-                self?.registerHotKey()
-            }
-            item.state = index == Settings.ocrHotKeyIndex ? .on : .off
-            keyMenu.addItem(item)
-        }
-        let keyItem = NSMenuItem(title: "识别文字快捷键：\(combo.display)", action: nil, keyEquivalent: "")
-        keyItem.submenu = keyMenu
-        items.append(keyItem)
-        return items
-    }
 }

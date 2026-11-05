@@ -83,8 +83,8 @@ final class RecorderTool: ToolModule {
 
     private func registerHotKey() {
         if let id = hotKeyID { HotKeyCenter.shared.unregister(id) }
-        hotKeyID = HotKeyCenter.shared.register(Settings.recordHotKey) { [weak self] in self?.hotKeyPressed() }
-        hotKeyRegistered = hotKeyID != nil
+        hotKeyID = Settings.recordHotKey.flatMap { HotKeyCenter.shared.register($0) { [weak self] in self?.hotKeyPressed() } }
+        hotKeyRegistered = Settings.recordHotKey == nil || hotKeyID != nil
     }
 
     /// ⌘4：空闲时选区域；控制条出来后 = 开始；等定时开始时 = 现在就开始；录制中或暂停中 = 停止
@@ -485,8 +485,8 @@ final class RecorderTool: ToolModule {
         let p = ScreenPenSession(region: target.globalFrame, present: present)
         p.onChange = { [weak self] on in self?.hud?.setPenOn(on) }
         pen = p
-        if present, penHotKeyID == nil {
-            penHotKeyID = HotKeyCenter.shared.register(ScreenPenHotKey.combo) { [weak self] in self?.togglePen() }
+        if present, penHotKeyID == nil, let combo = Settings.hotKey(.screenPen) {
+            penHotKeyID = HotKeyCenter.shared.register(combo) { [weak self] in self?.togglePen() }
         }
     }
 
@@ -597,16 +597,16 @@ final class RecorderTool: ToolModule {
         let elapsed = RecordGeometry.durationText(job?.elapsed ?? 0)
         switch state {
         case .recording:
-            items.append(ActionMenuItem("■ 停止录制（已录 \(elapsed)）", key: combo.menuKey, modifiers: combo.menuModifiers) {
+            items.append(ActionMenuItem("■ 停止录制（已录 \(elapsed)）", key: combo?.menuKey ?? "", modifiers: combo?.menuModifiers ?? []) {
                 [weak self] in self?.stop()
             })
             items.append(ActionMenuItem("⏸ 暂停") { [weak self] in self?.pause() })
         case .paused:
             items.append(ActionMenuItem("▶ 继续录制（已录 \(elapsed)）") { [weak self] in self?.resume() })
-            items.append(ActionMenuItem("■ 停止录制", key: combo.menuKey, modifiers: combo.menuModifiers) { [weak self] in self?.stop() })
+            items.append(ActionMenuItem("■ 停止录制", key: combo?.menuKey ?? "", modifiers: combo?.menuModifiers ?? []) { [weak self] in self?.stop() })
         case .scheduled(let target, let at):
             items.append(.info("⏰ \(RecordSchedule.startTitle(at, now: Date()))"))
-            items.append(ActionMenuItem("现在就开始", key: combo.menuKey, modifiers: combo.menuModifiers) { [weak self] in
+            items.append(ActionMenuItem("现在就开始", key: combo?.menuKey ?? "", modifiers: combo?.menuModifiers ?? []) { [weak self] in
                 self?.beginCountdown(target)
             })
             items.append(ActionMenuItem("取消定时录制") { [weak self] in self?.reset() })
@@ -615,12 +615,12 @@ final class RecorderTool: ToolModule {
         case .pausing, .stopping:
             items.append(.info("录屏处理中…"))
         case .idle, .choosing:
-            items.append(ActionMenuItem("录屏（框选 / 单击窗口 / 整屏）", key: hotKeyRegistered ? combo.menuKey : "",
-                                        modifiers: combo.menuModifiers) { [weak self] in self?.choose(delay: 0.2) })
+            items.append(ActionMenuItem("录屏（框选 / 单击窗口 / 整屏）", key: hotKeyRegistered ? (combo?.menuKey ?? "") : "",
+                                        modifiers: combo?.menuModifiers ?? []) { [weak self] in self?.choose(delay: 0.2) })
         }
         if !hotKeyRegistered {
-            items.append(.info("⚠︎ 快捷键 \(combo.display) 没注册上，可能被别的软件占用，换一个试试"))
-        } else if let rival = combo.runningRival {
+            items.append(.info("⚠︎ 快捷键 \(combo?.display ?? "") 没注册上，可能被别的软件占用，在「设置 → 快捷键」里换一个"))
+        } else if let combo, let rival = combo.runningRival {
             items.append(.info("⚠︎ \(rival) 开着，它也用 \(combo.display)"))
         }
         if let last = lastRecording, state == .idle {
@@ -633,57 +633,5 @@ final class RecorderTool: ToolModule {
             items.append(lastItem)
         }
         return items
-    }
-
-    /// 录屏设置：画质、录完打开预览、保存位置、快捷键（放进菜单里"录屏设置"子菜单）
-    func settingsItems() -> [NSMenuItem] {
-        let settingsMenu = NSMenu()
-        for q in RecordQuality.allCases {
-            let item = ActionMenuItem("画质：\(q.title)") { Settings.recordQuality = q }
-            item.state = Settings.recordQuality == q ? .on : .off
-            settingsMenu.addItem(item)
-        }
-        settingsMenu.addItem(.separator())
-        let openPreview = ActionMenuItem("录完自动打开预览") { Settings.recordOpenPreview.toggle() }
-        openPreview.state = Settings.recordOpenPreview ? .on : .off
-        settingsMenu.addItem(openPreview)
-        settingsMenu.addItem(.separator())
-        settingsMenu.addItem(.info("保存位置：" + (Settings.recordFolder.path as NSString).abbreviatingWithTildeInPath))
-        settingsMenu.addItem(ActionMenuItem("在访达中打开保存位置") {
-            let folder = Settings.recordFolder
-            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            NSWorkspace.shared.open(folder)
-        })
-        settingsMenu.addItem(ActionMenuItem("更改保存位置…") { Self.chooseFolder() })
-        if Settings.recordFolder != Settings.defaultRecordFolder {
-            settingsMenu.addItem(ActionMenuItem("恢复默认（影片/MacKit）") { Settings.recordFolder = Settings.defaultRecordFolder })
-        }
-        settingsMenu.addItem(.separator())
-        for (index, preset) in RecordHotKeyPresets.all.enumerated() {
-            let item = ActionMenuItem("快捷键 \(preset.display)　\(preset.note)") { [weak self] in
-                Settings.recordHotKeyIndex = index
-                self?.registerHotKey()
-            }
-            item.state = index == Settings.recordHotKeyIndex ? .on : .off
-            settingsMenu.addItem(item)
-        }
-        let items = settingsMenu.items
-        settingsMenu.removeAllItems()
-        return items
-    }
-
-    private static func chooseFolder() {
-        NSApp.activate(ignoringOtherApps: true)
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-        panel.prompt = "就存这里"
-        panel.directoryURL = Settings.recordFolder
-        panel.begin { response in
-            MainActor.assumeIsolated {
-                if response == .OK, let url = panel.url { Settings.recordFolder = url }
-            }
-        }
     }
 }

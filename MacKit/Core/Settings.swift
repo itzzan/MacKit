@@ -177,7 +177,8 @@ enum Settings {
         set { store.set(newValue, forKey: "screenshot.hotkeyIndex") }
     }
 
-    static var screenshotHotKey: HotKeyCombo { HotKeyPresets.screenshot[screenshotHotKeyIndex] }
+    /// 台阶 17 起都走 Settings.hotKey(_:)：设置窗口里单独改过的优先，没改过按"第几个预设"
+    static var screenshotHotKey: HotKeyCombo? { hotKey(.screenshot) }
 
     static let defaultSaveFolder = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Pictures/MacKit", isDirectory: true)
@@ -205,7 +206,8 @@ enum Settings {
         set { store.set(newValue, forKey: "pin.hotkeyIndex") }
     }
 
-    static var pinHotKeys: PinHotKeys { PinHotKeyPresets.all[pinHotKeyIndex] }
+    static var pinHotKey: HotKeyCombo? { hotKey(.pin) }
+    static var pinToggleHotKey: HotKeyCombo? { hotKey(.pinToggle) }
 
     /// 快速模式：框选松手直接复制，不出标注工具栏
     static var screenshotQuickMode: Bool {
@@ -232,7 +234,7 @@ enum Settings {
         set { store.set(newValue, forKey: "clipboard.hotkeyIndex") }
     }
 
-    static var clipboardHotKey: HotKeyCombo { ClipboardHotKeyPresets.all[clipboardHotKeyIndex] }
+    static var clipboardHotKey: HotKeyCombo? { hotKey(.clipboard) }
 
     /// 暂停记录剪贴板（重启后也保持）
     static var clipboardPaused: Bool {
@@ -253,7 +255,7 @@ enum Settings {
         set { store.set(newValue, forKey: "record.hotkeyIndex") }
     }
 
-    static var recordHotKey: HotKeyCombo { RecordHotKeyPresets.all[recordHotKeyIndex] }
+    static var recordHotKey: HotKeyCombo? { hotKey(.record) }
 
     static var recordSystemAudio: Bool {
         get { store.object(forKey: "record.systemAudio") as? Bool ?? true }
@@ -389,8 +391,9 @@ enum Settings {
         return !own.isEmpty || support.map { FileManager.default.fileExists(atPath: $0.path) } == true
     }
 
-    /// 六个快捷键一起换成某一套
+    /// 六个快捷键一起换成某一套（设置窗口里单独改过的也一起换回这一套）
     static func apply(_ scheme: HotKeyScheme) {
+        for action in HotKeyAction.schemeActions { resetHotKey(action) }
         let i = scheme.indices
         screenshotHotKeyIndex = i[0]
         pinHotKeyIndex = i[1]
@@ -402,8 +405,7 @@ enum Settings {
 
     /// 现在用的是哪一套（单独改过某一个就哪套都不是）
     static var hotKeyScheme: HotKeyScheme? {
-        let now = [screenshotHotKeyIndex, pinHotKeyIndex, clipboardHotKeyIndex, recordHotKeyIndex, ocrHotKeyIndex, measureHotKeyIndex]
-        return HotKeyScheme.allCases.first { $0.indices == now }
+        HotKeyScheme.allCases.first { scheme in HotKeyAction.schemeActions.allSatisfy { hotKey($0) == $0.combo(in: scheme) } }
     }
 
     /// 老用户升级到 1.0：把现在用着的快捷键原样写下来，以后默认值怎么变都不影响
