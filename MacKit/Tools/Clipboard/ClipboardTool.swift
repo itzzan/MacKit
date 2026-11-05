@@ -41,6 +41,8 @@ final class ClipboardTool: ToolModule {
         }
     }
 
+    func reloadHotKeys() { registerHotKey() }
+
     private func registerHotKey() {
         if let id = hotKeyID { HotKeyCenter.shared.unregister(id) }
         hotKeyID = HotKeyCenter.shared.register(Settings.clipboardHotKey) { [weak self] in self?.togglePanel() }

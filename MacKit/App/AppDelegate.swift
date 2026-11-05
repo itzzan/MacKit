@@ -46,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// 菜单栏图标：录屏中显示红点和时长（优先），防休眠时是咖啡杯，平常是扳手
     private var recordingText: String?
     private var keepAwakeOn = false
+    private var welcome: WelcomeWindow?
     private(set) var emergencyQuitRegistered = false
 
     init(selfTest: Bool) {
@@ -63,6 +64,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             IconMaker.run(arguments: CommandLine.arguments)
             return
         }
+        if CommandLine.arguments.contains("--welcome-preview") {
+            StylePreview.runWelcome(arguments: CommandLine.arguments)
+            return
+        }
         if CommandLine.arguments.contains("--style-preview") {
             StylePreview.run(arguments: CommandLine.arguments)
             return
@@ -71,6 +76,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             LongShotSmokeTest.run(resultPath: CommandLine.arguments[i + 1])
             return
         }
+        // 1.0 起：第一次打开。要在注册快捷键之前定好用哪一套
+        let firstLaunch = selfTest ? FirstLaunch.nothing
+            : FirstLaunch.decide(done: Settings.welcomeDone, hasPreviousData: Settings.hasPreviousData)
+        switch firstLaunch {
+        case .keepOldHotKeys:
+            Settings.pinCurrentHotKeys()                  // 老用户：快捷键原样写下来
+            Settings.welcomeDone = true
+            Log.app.notice("first launch of 1.0: existing user, hotkeys kept")
+        case .welcome:
+            Settings.apply(.control)                      // 新用户：先用很少冲突的 ⌃⇧ 那一套
+            Log.app.notice("first launch: new user, welcome")
+        case .nothing:
+            break
+        }
+
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
             let image = NSImage(systemSymbolName: "wrench.and.screwdriver", accessibilityDescription: "MacKit")
@@ -102,6 +122,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             exit(0)                          // 不走正常退出流程，卡在对话框里也能退
         } != nil
         Log.app.notice("MacKit \(AppInfo.version, privacy: .public) launched")
+        if firstLaunch == .welcome {
+            Settings.welcomeDone = true
+            showWelcome()
+        }
 
         if selfTest {
             SelfTest.run(statusItem: item, screenshot: screenshot, pin: pin, recorder: recorder, emergencyQuit: emergencyQuitRegistered)
@@ -136,6 +160,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// 欢迎窗口（第一次打开、菜单"使用说明"）
+    func showWelcome() {
+        if let welcome { welcome.show(); return }
+        let w = WelcomeWindow()
+        w.onSchemeChange = { [weak self] _ in self?.modules.forEach { $0.reloadHotKeys() } }
+        w.onClose = { [weak self] in self?.welcome = nil }
+        welcome = w
+        w.show()
+    }
+
     func menuWillOpen(_ menu: NSMenu) { status.menuOpened() }
     func menuDidClose(_ menu: NSMenu) { status.menuClosed() }
 
@@ -164,6 +198,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !ScreenPermission.isGranted { menu.addItem(ScreenPermission.menuItem()) }     // 没开权限时第一层就提醒
         let about = NSMenu()
         about.addItem(.info("MacKit \(AppInfo.version)"))
+        about.addItem(ActionMenuItem("使用说明（权限、快捷键）…") { [weak self] in self?.showWelcome() })
+        about.addItem(ActionMenuItem("打开项目主页") { NSWorkspace.shared.open(AppLinks.home) })
+        about.addItem(ActionMenuItem("看看有没有新版本") { NSWorkspace.shared.open(AppLinks.releases) })
+        about.addItem(.separator())
         about.addItem(ScreenPermission.menuItem())
         if emergencyQuitRegistered { about.addItem(.info("卡住时按 \(EmergencyHotKey.quit.display) 紧急退出")) }
         let aboutItem = NSMenuItem(title: "关于 MacKit", action: nil, keyEquivalent: "")

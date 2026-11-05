@@ -76,6 +76,8 @@ final class RecorderTool: ToolModule {
 
     func activate() { registerHotKey() }
 
+    func reloadHotKeys() { registerHotKey() }
+
     private func registerHotKey() {
         if let id = hotKeyID { HotKeyCenter.shared.unregister(id) }
         hotKeyID = HotKeyCenter.shared.register(Settings.recordHotKey) { [weak self] in self?.hotKeyPressed() }

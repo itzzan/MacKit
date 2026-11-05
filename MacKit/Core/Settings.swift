@@ -27,11 +27,11 @@ struct HotKeyCombo: Equatable {
 enum HotKeyPresets {
     private static let f1 = String(Character(UnicodeScalar(UInt16(NSF1FunctionKey))!))
 
-    /// 截图快捷键可选项。第一个是默认值（和你 Snipaste 里的设置一样）
+    /// 截图快捷键可选项。设置里存的是"第几个"，所以新的只能加在最后面（1.0 起新用户默认用最后的 ⌃⇧1）
     static let screenshot: [HotKeyCombo] = [
         HotKeyCombo(keyCode: UInt32(kVK_ANSI_1), carbonModifiers: UInt32(cmdKey),
                     display: "⌘1", menuKey: "1", menuModifiers: [.command],
-                    note: "和你的 Snipaste 一样", rival: ("com.Snipaste", "Snipaste")),
+                    note: "和 Snipaste 常用的设置一样", rival: ("com.Snipaste", "Snipaste")),
         HotKeyCombo(keyCode: UInt32(kVK_ANSI_1), carbonModifiers: UInt32(cmdKey | shiftKey),
                     display: "⇧⌘1", menuKey: "1", menuModifiers: [.command, .shift],
                     note: "和 Snipaste 同时开着时用这个"),
@@ -41,7 +41,46 @@ enum HotKeyPresets {
         HotKeyCombo(keyCode: UInt32(kVK_ANSI_A), carbonModifiers: UInt32(controlKey | optionKey),
                     display: "⌃⌥A", menuKey: "a", menuModifiers: [.control, .option],
                     note: "QQ 截图习惯", rival: ("com.tencent.qq", "QQ")),
+        HotKeyScheme.combo(1, note: "很少和别的软件冲突"),
     ]
+}
+
+/// 两套快捷键方案（1.0 起）：⌃⇧1–⌃⇧6 很少跟别的软件冲突；⌘1–⌘6 和 Snipaste 常用设置一样，但会占掉浏览器切标签
+enum HotKeyScheme: String, CaseIterable {
+    case control
+    case command
+
+    var title: String {
+        switch self {
+        case .control: "⌃⇧1 到 ⌃⇧6（推荐：很少和别的软件冲突）"
+        case .command: "⌘1 到 ⌘6（和 Snipaste 常用设置一样，但浏览器里 ⌘1–⌘6 切标签会被占掉）"
+        }
+    }
+
+    /// 截图、贴图、剪贴板、录屏、识别、测量各自在可选项里排第几
+    var indices: [Int] {
+        switch self {
+        case .control: [HotKeyPresets.screenshot.count - 1, PinHotKeyPresets.all.count - 1, ClipboardHotKeyPresets.all.count - 1,
+                        RecordHotKeyPresets.all.count - 1, RecognizeHotKeyPresets.ocr.count - 1, RecognizeHotKeyPresets.measure.count - 1]
+        case .command: [0, 0, 0, 0, 0, 0]
+        }
+    }
+
+    /// 一行写清楚这套是什么
+    var summary: String {
+        let p = self == .control ? "⌃⇧" : "⌘"
+        return "截图 \(p)1　贴图 \(p)2　剪贴板 \(p)3　录屏 \(p)4　识别文字 \(p)5　测量 \(p)6"
+    }
+
+    /// ⌃⇧ + 数字
+    static func combo(_ n: Int, note: String, alsoOption: Bool = false) -> HotKeyCombo {
+        let codes = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_6]
+        var mods = controlKey | shiftKey
+        var flags: NSEvent.ModifierFlags = [.control, .shift]
+        if alsoOption { mods |= optionKey; flags.insert(.option) }
+        return HotKeyCombo(keyCode: UInt32(codes[n - 1]), carbonModifiers: UInt32(mods),
+                           display: (alsoOption ? "⌃⌥⇧" : "⌃⇧") + "\(n)", menuKey: "\(n)", menuModifiers: flags, note: note)
+    }
 }
 
 /// 紧急退出：MacKit 卡住时也能用（全局快捷键在卡住时照样收得到）。
@@ -61,7 +100,7 @@ struct PinHotKeys {
 enum PinHotKeyPresets {
     private static let f3 = String(Character(UnicodeScalar(UInt16(NSF3FunctionKey))!))
 
-    /// 第一个是默认值（2026-10-28 用户选的 ⌘2）
+    /// 第一个是老用户的默认值（⌘2）；新的加在最后面
     static let all: [PinHotKeys] = [
         PinHotKeys(
             pin: HotKeyCombo(keyCode: UInt32(kVK_ANSI_2), carbonModifiers: UInt32(cmdKey),
@@ -77,10 +116,12 @@ enum PinHotKeyPresets {
             toggle: HotKeyCombo(keyCode: UInt32(kVK_F3), carbonModifiers: UInt32(shiftKey),
                                 display: "⇧F3", menuKey: f3, menuModifiers: [.shift],
                                 note: "", rival: ("com.Snipaste", "Snipaste"))),
+        PinHotKeys(pin: HotKeyScheme.combo(2, note: "很少和别的软件冲突"),
+                   toggle: HotKeyScheme.combo(2, note: "", alsoOption: true)),
     ]
 }
 
-/// 剪贴板历史的呼出快捷键。第一个是默认值（2026-11-04 用户选的 ⌘3）
+/// 剪贴板历史的呼出快捷键。第一个是老用户的默认值（⌘3）；新的加在最后面
 enum ClipboardHotKeyPresets {
     static let all: [HotKeyCombo] = [
         HotKeyCombo(keyCode: UInt32(kVK_ANSI_3), carbonModifiers: UInt32(cmdKey),
@@ -89,10 +130,11 @@ enum ClipboardHotKeyPresets {
                     display: "⇧⌘V", menuKey: "v", menuModifiers: [.command, .shift], note: "有些软件里它是「粘贴为纯文本」"),
         HotKeyCombo(keyCode: UInt32(kVK_ANSI_C), carbonModifiers: UInt32(cmdKey | shiftKey),
                     display: "⇧⌘C", menuKey: "c", menuModifiers: [.command, .shift], note: "Maccy 的默认"),
+        HotKeyScheme.combo(3, note: "很少和别的软件冲突"),
     ]
 }
 
-/// 录屏快捷键。第一个是默认值（2026-11-04 用户选的 ⌘4）
+/// 录屏快捷键。第一个是老用户的默认值（⌘4）；新的加在最后面
 enum RecordHotKeyPresets {
     static let all: [HotKeyCombo] = [
         HotKeyCombo(keyCode: UInt32(kVK_ANSI_4), carbonModifiers: UInt32(cmdKey),
@@ -100,22 +142,25 @@ enum RecordHotKeyPresets {
         HotKeyCombo(keyCode: UInt32(kVK_ANSI_R), carbonModifiers: UInt32(controlKey | optionKey),
                     display: "⌃⌥R", menuKey: "r", menuModifiers: [.control, .option], note: "QQ 录屏习惯",
                     rival: ("com.tencent.qq", "QQ")),
+        HotKeyScheme.combo(4, note: "很少和别的软件冲突"),
     ]
 }
 
-/// 识别文字、测量的快捷键。第一个是默认值（2026-11-04 用户选的 ⌘5、⌘6）
+/// 识别文字、测量的快捷键。第一个是老用户的默认值（⌘5、⌘6）；新的加在最后面
 enum RecognizeHotKeyPresets {
     static let ocr: [HotKeyCombo] = [
         HotKeyCombo(keyCode: UInt32(kVK_ANSI_5), carbonModifiers: UInt32(cmdKey),
                     display: "⌘5", menuKey: "5", menuModifiers: [.command], note: "接着 ⌘1 到 ⌘4"),
         HotKeyCombo(keyCode: UInt32(kVK_ANSI_O), carbonModifiers: UInt32(controlKey | optionKey),
                     display: "⌃⌥O", menuKey: "o", menuModifiers: [.control, .option], note: "不占 ⌘ 数字"),
+        HotKeyScheme.combo(5, note: "很少和别的软件冲突"),
     ]
     static let measure: [HotKeyCombo] = [
         HotKeyCombo(keyCode: UInt32(kVK_ANSI_6), carbonModifiers: UInt32(cmdKey),
                     display: "⌘6", menuKey: "6", menuModifiers: [.command], note: "接着 ⌘5"),
         HotKeyCombo(keyCode: UInt32(kVK_ANSI_M), carbonModifiers: UInt32(controlKey | optionKey),
                     display: "⌃⌥M", menuKey: "m", menuModifiers: [.control, .option], note: "不占 ⌘ 数字"),
+        HotKeyScheme.combo(6, note: "很少和别的软件冲突"),
     ]
 }
 
@@ -288,5 +333,61 @@ enum Settings {
     static var askedScreenPermission: Bool {
         get { store.bool(forKey: "permission.askedScreen") }
         set { store.set(newValue, forKey: "permission.askedScreen") }
+    }
+
+    // MARK: 1.0 起：第一次打开
+
+    /// 第一次打开的事办过了（新用户看过欢迎窗口 / 老用户的快捷键已经原样写下来）
+    static var welcomeDone: Bool {
+        get { store.bool(forKey: "welcome.done") }
+        set { store.set(newValue, forKey: "welcome.done") }
+    }
+
+    /// 这台电脑上以前用过 MacKit 没有：设置里有 MacKit 自己的东西，或者存过剪贴板历史
+    static var hasPreviousData: Bool {
+        let domain = store.persistentDomain(forName: Bundle.main.bundleIdentifier ?? "local.mackit.MacKit") ?? [:]
+        let own = domain.keys.filter { !$0.hasPrefix("NS") && !$0.hasPrefix("Apple") && !$0.hasPrefix("com.apple") && $0 != "welcome.done" }
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("MacKit", isDirectory: true)
+        return !own.isEmpty || support.map { FileManager.default.fileExists(atPath: $0.path) } == true
+    }
+
+    /// 六个快捷键一起换成某一套
+    static func apply(_ scheme: HotKeyScheme) {
+        let i = scheme.indices
+        screenshotHotKeyIndex = i[0]
+        pinHotKeyIndex = i[1]
+        clipboardHotKeyIndex = i[2]
+        recordHotKeyIndex = i[3]
+        ocrHotKeyIndex = i[4]
+        measureHotKeyIndex = i[5]
+    }
+
+    /// 现在用的是哪一套（单独改过某一个就哪套都不是）
+    static var hotKeyScheme: HotKeyScheme? {
+        let now = [screenshotHotKeyIndex, pinHotKeyIndex, clipboardHotKeyIndex, recordHotKeyIndex, ocrHotKeyIndex, measureHotKeyIndex]
+        return HotKeyScheme.allCases.first { $0.indices == now }
+    }
+
+    /// 老用户升级到 1.0：把现在用着的快捷键原样写下来，以后默认值怎么变都不影响
+    static func pinCurrentHotKeys() {
+        screenshotHotKeyIndex = screenshotHotKeyIndex
+        pinHotKeyIndex = pinHotKeyIndex
+        clipboardHotKeyIndex = clipboardHotKeyIndex
+        recordHotKeyIndex = recordHotKeyIndex
+        ocrHotKeyIndex = ocrHotKeyIndex
+        measureHotKeyIndex = measureHotKeyIndex
+    }
+}
+
+/// 第一次打开 1.0 时做什么（纯判断，自检测它）
+enum FirstLaunch: Equatable {
+    case nothing          // 办过了
+    case keepOldHotKeys   // 老用户：快捷键原样写下来，不弹欢迎窗口
+    case welcome          // 新用户：先换成 ⌃⇧ 那一套，再弹欢迎窗口
+
+    static func decide(done: Bool, hasPreviousData: Bool) -> FirstLaunch {
+        if done { return .nothing }
+        return hasPreviousData ? .keepOldHotKeys : .welcome
     }
 }

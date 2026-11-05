@@ -52,6 +52,7 @@ enum SelfTest {
         testTheme()
         testMenuLayout(statusItem.menu)
         testIconAndWindows()
+        testRelease(statusItem.menu)
 
         print(failures == 0 ? "SELFTEST OK" : "SELFTEST FAILED (\(failures))")
         exit(failures == 0 ? 0 : 1)
@@ -1423,6 +1424,57 @@ enum SelfTest {
             ctx.draw(image, in: CGRect(x: -x, y: -(image.height - 1 - y), width: image.width, height: image.height))
         }
         return Int(bytes[3])
+    }
+
+    // MARK: 1.0 上线：第一次打开、两套快捷键、欢迎窗口
+
+    private static func testRelease(_ menu: NSMenu?) {
+        check(FirstLaunch.decide(done: false, hasPreviousData: true) == .keepOldHotKeys
+              && FirstLaunch.decide(done: false, hasPreviousData: false) == .welcome
+              && FirstLaunch.decide(done: true, hasPreviousData: false) == .nothing
+              && FirstLaunch.decide(done: true, hasPreviousData: true) == .nothing,
+              "第一次打开 1.0：老用户快捷键原样留着，新用户弹欢迎窗口，办过一次就不再管")
+        let control = HotKeyScheme.control.indices, command = HotKeyScheme.command.indices
+        let controlKeys = [HotKeyPresets.screenshot[control[0]].display, PinHotKeyPresets.all[control[1]].pin.display,
+                           ClipboardHotKeyPresets.all[control[2]].display, RecordHotKeyPresets.all[control[3]].display,
+                           RecognizeHotKeyPresets.ocr[control[4]].display, RecognizeHotKeyPresets.measure[control[5]].display]
+        let commandKeys = [HotKeyPresets.screenshot[command[0]].display, PinHotKeyPresets.all[command[1]].pin.display,
+                           ClipboardHotKeyPresets.all[command[2]].display, RecordHotKeyPresets.all[command[3]].display,
+                           RecognizeHotKeyPresets.ocr[command[4]].display, RecognizeHotKeyPresets.measure[command[5]].display]
+        check(controlKeys == ["⌃⇧1", "⌃⇧2", "⌃⇧3", "⌃⇧4", "⌃⇧5", "⌃⇧6"] && commandKeys == ["⌘1", "⌘2", "⌘3", "⌘4", "⌘5", "⌘6"]
+              && PinHotKeyPresets.all[control[1]].toggle.display == "⌃⌥⇧2",
+              "两套快捷键：⌃⇧1–⌃⇧6（贴图隐藏是 ⌃⌥⇧2）和 ⌘1–⌘6；新的加在最后，老用户存的\u{201C}第几个\u{201D}不会错位")
+        check(HotKeyPresets.screenshot[0].display == "⌘1" && !HotKeyPresets.screenshot[0].note.contains("你的"),
+              "老用户的第一个选项还是 ⌘1，说明文字不再写\u{201C}你的 Snipaste\u{201D}")
+
+        // 欢迎窗口（不显示）：选一套 → 六个快捷键一起换；测完换回原样
+        let saved = [Settings.screenshotHotKeyIndex, Settings.pinHotKeyIndex, Settings.clipboardHotKeyIndex,
+                     Settings.recordHotKeyIndex, Settings.ocrHotKeyIndex, Settings.measureHotKeyIndex]
+        defer {
+            Settings.screenshotHotKeyIndex = saved[0]; Settings.pinHotKeyIndex = saved[1]; Settings.clipboardHotKeyIndex = saved[2]
+            Settings.recordHotKeyIndex = saved[3]; Settings.ocrHotKeyIndex = saved[4]; Settings.measureHotKeyIndex = saved[5]
+        }
+        let welcome = WelcomeWindow()
+        var changed: [HotKeyScheme] = []
+        welcome.onSchemeChange = { changed.append($0) }
+        check(welcome.schemeButtons.count == 2 && welcome.permissionRows.keys.sorted() == ["accessibility", "media", "screen"]
+              && welcome.permissionRows["screen"]?.button != nil && welcome.permissionRows["media"]?.button == nil,
+              "欢迎窗口：屏幕录制、辅助功能各有\u{201C}去打开\u{201D}，麦克风摄像头只是说明；两套快捷键可选")
+        welcome.choose(.control)
+        check(Settings.hotKeyScheme == .control && Settings.screenshotHotKey.display == "⌃⇧1" && changed == [.control]
+              && welcome.schemeButtons[.control]?.state == .on, "欢迎窗口里选 ⌃⇧ 那套：六个快捷键一起换，各积木重新注册")
+        welcome.choose(.command)
+        check(Settings.hotKeyScheme == .command && Settings.measureHotKeyIndex == 0, "再换回 ⌘ 那套")
+        Settings.clipboardHotKeyIndex = 1
+        check(Settings.hotKeyScheme == nil, "单独改过某一个快捷键：哪套都不算，欢迎窗口里两个都不选")
+        welcome.window.close()
+
+        // 关于菜单
+        let aboutTitles = menu?.items.first { $0.title == "关于 MacKit" }?.submenu?.items.map(\.title) ?? []
+        check(aboutTitles.contains("使用说明（权限、快捷键）…") && aboutTitles.contains("打开项目主页") && aboutTitles.contains("看看有没有新版本")
+              && AppLinks.home.absoluteString == "https://github.com/itzzan/MacKit" && AppLinks.releases.path == "/itzzan/MacKit/releases",
+              "关于 MacKit：使用说明、项目主页、看看有没有新版本")
+        check(AppInfo.version.hasPrefix("1.0"), "版本号是 \(AppInfo.version)")
     }
 
     private static func testTheme() {

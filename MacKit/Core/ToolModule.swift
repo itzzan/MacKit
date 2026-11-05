@@ -10,8 +10,11 @@ protocol ToolModule: AnyObject {
     func menuItems() -> [NSMenuItem]
     /// 不常改的设置（快捷键、保存位置……），收进这一组最后的"设置"子菜单（台阶 10）
     func settingsItems() -> [NSMenuItem]
+    /// 快捷键在别处被换了（欢迎窗口里选了另一套）：重新注册
+    func reloadHotKeys()
 }
 
 extension ToolModule {
     func settingsItems() -> [NSMenuItem] { [] }
+    func reloadHotKeys() {}
 }

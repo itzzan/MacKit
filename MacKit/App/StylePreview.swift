@@ -10,14 +10,40 @@ enum StylePreview {
         let view: NSView
     }
 
+    /// MacKit --welcome-preview <输出.png> [dark]：把欢迎窗口画成图（不弹窗口、不改设置）
+    static func runWelcome(arguments: [String]) {
+        guard let i = arguments.firstIndex(of: "--welcome-preview"), arguments.indices.contains(i + 1) else { exit(2) }
+        let dark = arguments.contains("dark")
+        let w = WelcomeWindow()
+        guard let content = w.window.contentView else { exit(1) }
+        content.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        content.layoutSubtreeIfNeeded()
+        content.displayIfNeeded()
+        guard let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { exit(1) }
+        content.cacheDisplay(in: content.bounds, to: rep)
+        guard let image = rep.cgImage, let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { exit(1) }
+        ctx.setFillColor((dark ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 0.96, alpha: 1)).cgColor)
+        ctx.fill(CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        guard let out = ctx.makeImage(), write(out, to: arguments[i + 1]) else { exit(1) }
+        print("欢迎窗口：\(arguments[i + 1])　\(out.width)×\(out.height)")
+        exit(0)
+    }
+
     static func run(arguments: [String]) {
         guard let i = arguments.firstIndex(of: "--style-preview"), arguments.indices.contains(i + 2) else { exit(2) }
         let out = arguments[i + 1], label = arguments[i + 2]
-        let left = arguments.indices.contains(i + 3) ? arguments[i + 3] : nil
+        let third = arguments.indices.contains(i + 3) ? arguments[i + 3] : nil
+        let readme = third == "readme"                   // 给 README 用的界面一览：不画"按钮的几种样子"
+        let left = readme ? nil : third
         Theme.solidBars = true                   // 毛玻璃画不出来，样张里用实色
-        let note = left == nil ? "毛玻璃在图里画不出来：这一栏的灰底在屏幕上其实是半透明的深色"
-                               : "用接近屏幕上真实效果的深色实底画（屏幕上是半透明毛玻璃）"
-        let column = renderColumn(label: label, samples: samples(), note: note)
+        let note = readme ? "示意图：屏幕上这些条是半透明的毛玻璃"
+            : left == nil ? "毛玻璃在图里画不出来：这一栏的灰底在屏幕上其实是半透明的深色"
+                          : "用接近屏幕上真实效果的深色实底画（屏幕上是半透明毛玻璃）"
+        let list = samples().filter { !(readme && $0.title.hasPrefix("按钮")) }
+        let column = renderColumn(label: label, samples: list, note: note)
         var image = column
         if let left, let leftImage = load(left), let column {
             image = sideBySide(leftImage, column, leftNote: "毛玻璃在图里画不出来：这一栏的灰底在屏幕上其实是半透明的深色")
@@ -143,10 +169,11 @@ enum StylePreview {
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = ns
         var y = height - 46
-        (label as NSString).draw(at: CGPoint(x: pad, y: y), withAttributes: [
-            .font: NSFont.systemFont(ofSize: 22, weight: .bold), .foregroundColor: NSColor.black])
+        let titleAttrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 22, weight: .bold), .foregroundColor: NSColor.black]
+        (label as NSString).draw(at: CGPoint(x: pad, y: y), withAttributes: titleAttrs)
         if let note {
-            (note as NSString).draw(at: CGPoint(x: pad + 80, y: y + 5), withAttributes: [
+            let titleWidth = (label as NSString).size(withAttributes: titleAttrs).width
+            (note as NSString).draw(at: CGPoint(x: pad + max(80, titleWidth + 24), y: y + 5), withAttributes: [
                 .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.darkGray])
         }
         y -= 24

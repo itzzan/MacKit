@@ -18,6 +18,8 @@ final class ScreenshotTool: ToolModule {
 
     func activate() { registerHotKey() }
 
+    func reloadHotKeys() { registerHotKey() }
+
     private func registerHotKey() {
         if let id = hotKeyID { HotKeyCenter.shared.unregister(id) }
         hotKeyID = HotKeyCenter.shared.register(Settings.screenshotHotKey) { [weak self] in

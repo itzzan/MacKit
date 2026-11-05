@@ -50,6 +50,16 @@ enum ScreenPermission {
         if alert.runModal() == .alertFirstButtonReturn { openSettings() }
     }
 
+    /// 欢迎窗口里的"去打开"：第一次先让系统弹它自己的授权窗口（会把 MacKit 加进列表），以后直接打开系统设置
+    static func requestAndOpenSettings() {
+        if !Settings.askedScreenPermission {
+            Settings.askedScreenPermission = true
+            _ = CGRequestScreenCaptureAccess()
+        } else {
+            openSettings()
+        }
+    }
+
     static func openSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
             NSWorkspace.shared.open(url)

@@ -12,6 +12,8 @@ final class PinTool: ToolModule {
 
     func activate() { registerHotKeys() }
 
+    func reloadHotKeys() { registerHotKeys() }
+
     private func registerHotKeys() {
         for id in hotKeyIDs { HotKeyCenter.shared.unregister(id) }
         let keys = Settings.pinHotKeys
