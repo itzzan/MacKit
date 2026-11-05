@@ -1,7 +1,8 @@
 import AppKit
 
 /// 剪贴板历史：排好序的列表 + 存盘。
-/// 顺序：置顶的在最上面（最近置顶的在前），其余按最近复制的在前。
+/// 顺序：按最近复制的在前（台阶 14 起收藏的不再挤在最上面，单独有一栏"收藏"，按你排的顺序）。
+/// 收藏的不受 200 条上限和"清空历史"影响。
 /// 存在 ~/Library/Application Support/MacKit/Clipboard/：index.json 是列表，大的内容放在 blobs/ 里
 @MainActor
 final class ClipboardStore {
@@ -56,7 +57,7 @@ final class ClipboardStore {
 
     // MARK: 增删改
 
-    /// 新复制的内容。和已有的一样就把那条挪到最上面（置顶的留在原位），返回这条
+    /// 新复制的内容。和已有的一样就把那条挪到最上面，返回这条
     @discardableResult
     func add(_ s: ClipboardSnapshot, now: Date = Date()) -> ClipboardItem {
         if let index = items.firstIndex(where: { $0.fingerprint == s.fingerprint }) {
@@ -81,7 +82,7 @@ final class ClipboardStore {
         return item
     }
 
-    /// 从历史里粘贴后：把它挪到最上面（置顶的不动）
+    /// 从历史里粘贴后：把它挪到最上面
     func touch(_ id: UUID, now: Date = Date()) {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
         var item = items.remove(at: index)
@@ -99,16 +100,59 @@ final class ClipboardStore {
         save()
     }
 
-    func togglePin(_ id: UUID) {
+    /// 收藏栏：按你排的顺序；老文件里的置顶没有顺序，按原来的先后
+    var favorites: [ClipboardItem] {
+        items.enumerated().filter { $0.element.pinned }
+            .sorted { ($0.element.favoriteOrder ?? Int.max, $0.offset) < ($1.element.favoriteOrder ?? Int.max, $1.offset) }
+            .map(\.element)
+    }
+
+    /// ⌘P：收藏 / 取消收藏。新收藏的排在收藏栏最前面
+    func toggleFavorite(_ id: UUID) {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
-        var item = items.remove(at: index)
-        item.pinned.toggle()
-        if item.pinned {
-            items.insert(item, at: 0)                                // 最近置顶的排最前
+        if items[index].pinned {
+            items[index].pinned = false
+            items[index].favoriteName = nil
+            items[index].favoriteOrder = nil
         } else {
-            insert(item)
+            let first = favorites.first?.favoriteOrder ?? 0
+            items[index].pinned = true
+            items[index].favoriteOrder = min(first, 0) - 1
+            normalizeFavoriteOrder()
         }
         save()
+    }
+
+    /// ⌘R：给收藏起个名字（空的 = 不要名字）
+    func setFavoriteName(_ id: UUID, _ name: String?) {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        items[index].favoriteName = trimmed.isEmpty ? nil : String(trimmed.prefix(60))
+        if !items[index].pinned {                                    // 起名字 = 顺手收藏
+            items[index].pinned = true
+            items[index].favoriteOrder = (favorites.first?.favoriteOrder ?? 0) - 1
+        }
+        normalizeFavoriteOrder()
+        save()
+    }
+
+    /// 在收藏栏里挪到第 to 个
+    func moveFavorite(_ id: UUID, to: Int) {
+        var list = favorites
+        guard let from = list.firstIndex(where: { $0.id == id }) else { return }
+        let item = list.remove(at: from)
+        list.insert(item, at: min(max(to, 0), list.count))
+        for (order, f) in list.enumerated() {
+            if let i = items.firstIndex(where: { $0.id == f.id }) { items[i].favoriteOrder = order }
+        }
+        save()
+    }
+
+    /// 顺序重新编成 0、1、2……（只在内存里，不单独存）
+    private func normalizeFavoriteOrder() {
+        for (order, f) in favorites.enumerated() {
+            if let i = items.firstIndex(where: { $0.id == f.id }) { items[i].favoriteOrder = order }
+        }
     }
 
     func delete(_ id: UUID) {
@@ -117,7 +161,7 @@ final class ClipboardStore {
         save()
     }
 
-    /// 清空历史，置顶的保留
+    /// 清空历史，收藏的保留
     func clearUnpinned() {
         for item in items where !item.pinned { deleteBlobs(of: item) }
         items.removeAll { !$0.pinned }
@@ -127,15 +171,10 @@ final class ClipboardStore {
     var unpinnedCount: Int { items.filter { !$0.pinned }.count }
 
     private func insert(_ item: ClipboardItem) {
-        if item.pinned {
-            items.insert(item, at: 0)
-        } else {
-            let firstUnpinned = items.firstIndex { !$0.pinned } ?? items.endIndex
-            items.insert(item, at: firstUnpinned)
-        }
+        items.insert(item, at: 0)
     }
 
-    /// 超过上限时删最旧的（置顶的不算、不删）
+    /// 超过上限时删最旧的（收藏的不算、不删）
     private func trimAndSave() {
         while unpinnedCount > limit, let last = items.lastIndex(where: { !$0.pinned }) {
             deleteBlobs(of: items.remove(at: last))

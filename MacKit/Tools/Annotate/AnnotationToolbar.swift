@@ -265,16 +265,19 @@ final class AnnotationToolbar: NSView {
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
 
-        NSLayoutConstraint.activate([
+        // 右边、下边贴边的约束让一步：刚造出来时工具栏还是 0 大小（下面 update 才按内容定大小），
+        // 硬贴会和按钮的固定宽度打架，系统日志里刷满"约束冲突"（台阶 14 查到）
+        let soft = [stack.trailingAnchor.constraint(equalTo: trailingAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+                    background.trailingAnchor.constraint(equalTo: trailingAnchor),
+                    background.bottomAnchor.constraint(equalTo: bottomAnchor)]
+        for c in soft { c.priority = .init(999) }
+        NSLayoutConstraint.activate(soft + [
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
             background.leadingAnchor.constraint(equalTo: leadingAnchor),
-            background.trailingAnchor.constraint(equalTo: trailingAnchor),
             background.topAnchor.constraint(equalTo: topAnchor),
-            background.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+        setFrameSize(stack.fittingSize)
     }
 
     required init?(coder: NSCoder) { fatalError("not supported") }

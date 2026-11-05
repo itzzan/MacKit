@@ -46,6 +46,7 @@ enum SelfTest {
         testTextEditing()
         testPinAnnotation()
         testClipboard()
+        testClipboardPlus()
         testRecorder(recorder)
         testRecordingExtras(recorder)
         testRecordingOverlays(recorder)
@@ -868,7 +869,7 @@ enum SelfTest {
         pb.clearContents()
         if case .failure(.empty) = read() { check(true, "空剪贴板不记") } else { check(false, "空剪贴板不记") }
 
-        // 3. 存：顺序、去重、置顶、上限、删除、清空、存盘
+        // 3. 存：顺序、去重、收藏、上限、删除、清空、存盘
         let store = ClipboardStore(directory: dir.appendingPathComponent("store"), limit: 5)
         func addText(_ t: String, _ minute: Double) -> ClipboardItem? {
             pb.clearContents(); pb.setString(t, forType: .string)
@@ -880,11 +881,13 @@ enum SelfTest {
         _ = addText("甲", 4)
         check(store.items.map(\.title) == ["甲", "丙", "乙"] && store.items[0].copyCount == 2 && store.items[0].id == a?.id,
               "同一段复制两次：不多一条，挪到最上面")
-        if let b { store.togglePin(b.id) }
+        if let b { store.toggleFavorite(b.id) }
         _ = addText("丁", 5)
-        check(store.items.map(\.title) == ["乙", "丁", "甲", "丙"] && store.items[0].pinned, "置顶的一直在最上面")
+        check(store.items.map(\.title) == ["丁", "甲", "丙", "乙"] && store.favorites.map(\.title) == ["乙"],
+              "收藏的进收藏栏，历史里照旧按时间排（台阶 14 起不再挤到最上面）")
         for (i, t) in ["1", "2", "3", "4", "5", "6"].enumerated() { _ = addText("新\(t)", Double(10 + i)) }
-        check(store.unpinnedCount == 5 && store.items.first?.title == "乙", "超过上限删最旧的，置顶的不算、不删")
+        check(store.unpinnedCount == 5 && store.items.last?.title == "乙" && store.favorites.first?.title == "乙",
+              "超过上限删最旧的，收藏的不算、不删")
         pb.clearContents(); pb.setData(png + Data(count: 40 * 1024), forType: .png)      // 大于 32 KB → 单独存成文件
         let big = snap().map { store.add($0) }
         let blobs = dir.appendingPathComponent("store/blobs")
@@ -900,7 +903,7 @@ enum SelfTest {
         if let big { store.delete(big.id) }
         check(blobCount() == 0 && !store.items.contains { $0.id == big?.id }, "删掉一条，它单独存的文件也删掉")
         store.clearUnpinned()
-        check(store.items.count == 1 && store.items[0].title == "乙", "清空历史，置顶的保留")
+        check(store.items.count == 1 && store.items[0].title == "乙", "清空历史，收藏的保留")
 
         // 4. 放回剪贴板：原样 / 纯文字 / 文件
         let store2 = ClipboardStore(directory: dir.appendingPathComponent("store2"))
@@ -969,8 +972,8 @@ enum SelfTest {
         panel.select(2)
         let third = panel.selectedItem
         _ = panel.handleKey(key("p", code: 35, mods: .command))
-        check(store2.items.first?.id == third?.id && store2.items.first?.pinned == true && panel.shown.first?.id == third?.id,
-              "⌘P 置顶")
+        check(store2.items.first { $0.id == third?.id }?.isFavorite == true && store2.favorites.first?.id == third?.id
+              && panel.selectedItem?.id == third?.id, "⌘P 收藏：进收藏栏，这一行留在原处选着")
         let before = store2.items.count
         panel.select(1)
         _ = panel.handleKey(key("\u{8}", code: 51, mods: .command))
@@ -986,10 +989,149 @@ enum SelfTest {
         let row = ClipboardRowView()
         if let pinned = store2.items.first(where: \.pinned) {
             row.configure(item: pinned, icon: NSImage(), shortcut: "⌥1")
-            check(row.titleText.hasPrefix("📌"), "置顶的那条有图钉标记")
+            check(row.titleText.hasPrefix("⭐"), "收藏的那条有星星标记")
         }
         let thumb = ClipboardPanel.thumbnail(png)
         check(thumb != nil && (thumb?.size.width ?? 99) <= 48, "图片在列表里显示成小缩略图")
+    }
+
+    // MARK: 剪贴板加强（台阶 14）：收藏、不记某些软件、连续粘贴。私有剪贴板、临时文件夹，不碰你的历史
+
+    private static func testClipboardPlus() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("MacKitClipPlus-\(UUID().uuidString)")
+        let pb = NSPasteboard(name: NSPasteboard.Name("local.mackit.selftest.clipplus.\(UUID().uuidString)"))
+        let target = NSPasteboard(name: NSPasteboard.Name("local.mackit.selftest.queue.\(UUID().uuidString)"))
+        let savedIgnore = UserDefaults.standard.object(forKey: "clipboard.ignoredApps")
+        defer {
+            try? FileManager.default.removeItem(at: dir)
+            pb.releaseGlobally()
+            target.releaseGlobally()
+            if let savedIgnore { UserDefaults.standard.set(savedIgnore, forKey: "clipboard.ignoredApps") }
+            else { UserDefaults.standard.removeObject(forKey: "clipboard.ignoredApps") }
+        }
+        let store = ClipboardStore(directory: dir, limit: 50)
+        @discardableResult
+        func add(_ t: String) -> ClipboardItem? {
+            pb.clearContents(); pb.setString(t, forType: .string)
+            guard case .success(let s) = ClipboardReader.read(pb, source: nil, ignoredApps: []) else { return nil }
+            return store.add(s)
+        }
+        add("北京市朝阳区某某路 1 号")
+        add("第四条")
+        guard let a = add("你好，请问有什么可以帮您"), let c = add("发票抬头：某某公司") else { check(false, "剪贴板加强：准备几条"); return }
+
+        // 收藏：⌘P、⌘R 起名、搜名字、Tab、排顺序、存盘、老文件里的置顶
+        let tool = ClipboardTool(store: store, pasteboard: target)
+        let panel = tool.makePanel()
+        panel.show(near: CGPoint(x: 400, y: 400), present: false)
+        defer { panel.close(returnFocus: false) }
+        panel.select(panel.shown.firstIndex { $0.id == a.id } ?? 0)
+        _ = panel.handleKey(key("p", code: 35, mods: .command))
+        _ = panel.handleKey(key("r", code: 15, mods: .command))
+        check(panel.renamingID == a.id, "⌘R：搜索框变成起名字的地方")
+        panel.searchField.stringValue = "常用开场白"
+        _ = panel.control(panel.searchField, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:)))
+        check(store.items.first { $0.id == a.id }?.favoriteName == "常用开场白" && panel.renamingID == nil
+              && panel.searchField.stringValue.isEmpty, "起好名字回车：存下，搜索框恢复")
+        _ = panel.handleKey(key("\t", code: 48))
+        check(panel.tab == .favorites && panel.shown.map(\.id) == [a.id], "Tab：切到收藏栏，只有收藏的")
+        panel.searchField.stringValue = "开场白"
+        panel.reload()
+        check(panel.shown.first?.id == a.id, "收藏栏里搜名字能搜到")
+        panel.searchField.stringValue = ""
+        _ = panel.handleKey(key("\t", code: 48))
+        panel.select(panel.shown.firstIndex { $0.id == c.id } ?? 0)
+        _ = panel.handleKey(key("p", code: 35, mods: .command))
+        check(store.favorites.map(\.id) == [c.id, a.id], "再收藏一条：新收藏的排在收藏栏最前")
+        panel.setTab(.favorites)
+        panel.select(0)
+        _ = panel.handleKey(key("", code: 125, mods: [.command, .option]))
+        check(store.favorites.map(\.id) == [a.id, c.id], "⌥⌘↓：在收藏栏里往下挪")
+        let reopened = ClipboardStore(directory: dir, limit: 50)
+        reopened.load()
+        check(reopened.favorites.map(\.id) == [a.id, c.id] && reopened.favorites.first?.favoriteName == "常用开场白",
+              "退出再打开：收藏的顺序和名字都在")
+        store.clearUnpinned()
+        check(store.items.count == 2 && store.favorites.count == 2, "清空历史：收藏的不动")
+        // 老版本存的：只有"置顶"，没有名字和顺序
+        if let data = try? Data(contentsOf: dir.appendingPathComponent("index.json")),
+           var json = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            for i in json.indices { json[i].removeValue(forKey: "favoriteName"); json[i].removeValue(forKey: "favoriteOrder") }
+            let oldDir = dir.appendingPathComponent("old")
+            try? FileManager.default.createDirectory(at: oldDir, withIntermediateDirectories: true)
+            try? JSONSerialization.data(withJSONObject: json).write(to: oldDir.appendingPathComponent("index.json"))
+            let old = ClipboardStore(directory: oldDir, limit: 50)
+            old.load()
+            check(old.favorites.count == 2 && old.favorites.allSatisfy { $0.favoriteName == nil }, "老版本的置顶读进来自动变成收藏")
+        } else { check(false, "老版本的置顶读进来") }
+
+        // 不记某些软件
+        let me = Bundle.main.bundleIdentifier ?? "local.mackit.MacKit"
+        pb.clearContents(); pb.setString("从名单里的软件复制的", forType: .string)
+        if case .failure(.ignoredApp) = ClipboardReader.read(pb, source: .current, ignoredApps: [me]) {
+            check(true, "名单里的软件复制的：不进历史")
+        } else { check(false, "名单里的软件复制的不进历史") }
+        if case .success = ClipboardReader.read(pb, source: .current, ignoredApps: []) { check(true, "不在名单里：照常记") }
+        else { check(false, "不在名单里照常记") }
+        UserDefaults.standard.removeObject(forKey: "clipboard.ignoredApps")
+        check(ClipboardIgnoreList.ids == ["com.apple.keychainaccess"], "名单一开始就有钥匙串访问")
+        ClipboardIgnoreList.add("com.example.chat")
+        ClipboardIgnoreList.add("com.example.chat")
+        check(ClipboardIgnoreList.ids == ["com.apple.keychainaccess", "com.example.chat"], "加进名单（重复加只算一次）")
+        let ignoreWindow = ClipboardIgnoreWindow()
+        ignoreWindow.table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        ignoreWindow.removeSelected()
+        check(ClipboardIgnoreList.ids == ["com.apple.keychainaccess"] && ignoreWindow.ids.count == 1, "名单小窗口里删掉一个")
+        check(tool.settingsItems().contains { $0.title.hasPrefix("不记录这些软件…") }, "剪贴板设置里有\u{201C}不记录这些软件…\u{201D}")
+        if let front = ClipboardIgnoreList.frontApp?.localizedName {
+            check(tool.menuItems().contains { $0.title.contains("「\(front)」") }, "菜单里一键\u{201C}不记「\(front)」\u{201D}")
+        }
+
+        // 连续粘贴（不挂真的钩子：直接调"按了 ⌘V"）
+        let queue = tool.queue
+        guard let b = add("张三"), let c = add("男"), let d = add("28") else { check(false, "连续粘贴：准备几条"); return }
+        target.clearContents(); target.setString("原来剪贴板里的", forType: .string)
+        check(tool.menuItems().contains { $0.title.hasPrefix("开始连续粘贴") }, "菜单里有\u{201C}开始连续粘贴\u{201D}")
+        queue.start(with: [b, c])
+        check(queue.isActive && queue.statusText.hasPrefix("连续粘贴：已排 2 条"), "排好两条：小条写着已排 2 条")
+        queue.didCopy(d)
+        check(queue.queue.count == 3, "还没开始贴：新复制的排到队尾")
+        queue.willPaste()
+        check(target.string(forType: .string) == b.title && queue.statusText.hasPrefix("连续粘贴 2 / 3"), "按 ⌘V：换成第一条")
+        queue.didCopy(a)
+        check(queue.queue.count == 3, "开始贴以后新复制的不进队伍")
+        queue.willPaste()
+        check(target.string(forType: .string) == c.title, "再按 ⌘V：第二条")
+        if case .failure(.ownRestore) = ClipboardReader.read(target, source: nil, ignoredApps: []) { check(true, "换进去的带着 MacKit 的标记，不会又记进历史") }
+        else { check(false, "换进去的带标记") }
+        queue.willPaste()
+        check(target.string(forType: .string) == d.title && queue.queue.isFinished, "第三条，贴完了")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.9))
+        check(!queue.isActive && target.string(forType: .string) == "原来剪贴板里的", "贴完自动结束，剪贴板换回开始之前的")
+
+        queue.start()
+        queue.didCopy(a)
+        queue.didCopy(b)
+        queue.willPaste()
+        check(target.string(forType: .string) == a.title, "菜单开始后按顺序复制：⌘V 先贴第一段")
+        queue.finish()
+        queue.start(with: [d, b])
+        store.delete(d.id)
+        queue.willPaste()
+        check(target.string(forType: .string) == b.title, "排着的那条被删了：跳过它，贴下一条")
+        queue.finish()
+        check(!queue.isActive && target.string(forType: .string) == "原来剪贴板里的", "中途点结束：剪贴板也换回原来的")
+
+        add("第五条")                                               // 前面清空过历史，再补一条凑够三条
+        var queued: [UUID] = []
+        panel.onQueue = { items in queued = items.map(\.id) }
+        panel.setTab(.all)
+        panel.show(near: CGPoint(x: 400, y: 400), present: false)
+        panel.select(2)
+        panel.toggleSelect(0)
+        let expected = [panel.shown[2].id, panel.shown[0].id]
+        _ = panel.handleKey(key("\r", code: 36, mods: .command))
+        check(queued == expected, "小窗口里 ⌘ 点选两条、⌘回车：按点的先后排进连续粘贴")
     }
 
     // MARK: 录屏（台阶 5）。真的录屏要弹系统窗口、占屏幕，不在这里做；这里测"录哪里、怎么录"算得对不对

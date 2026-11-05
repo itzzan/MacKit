@@ -1,6 +1,7 @@
 import AppKit
 
-/// 剪贴板积木：在后台记下复制过的东西；⌘3 弹出历史，搜索、粘贴、置顶、删除、钉成贴图
+/// 剪贴板积木：在后台记下复制过的东西；⌘3 弹出历史，搜索、粘贴、收藏、删除、钉成贴图；
+/// 台阶 14：收藏栏、不记某些软件、连续粘贴
 @MainActor
 final class ClipboardTool: ToolModule {
     let store: ClipboardStore
@@ -10,10 +11,17 @@ final class ClipboardTool: ToolModule {
     private(set) var hotKeyRegistered = false
     private var hotKeyID: UInt32?
     private var panel: ClipboardPanel?
+    private var ignoreWindow: ClipboardIgnoreWindow?
+    /// 连续粘贴（台阶 14）
+    let queue: PasteQueueController
 
     init(store: ClipboardStore? = nil, pasteboard: NSPasteboard? = nil) {
         self.store = store ?? ClipboardStore()
         self.watcher = ClipboardWatcher(pasteboard: pasteboard ?? .general)
+        // 自检时不挂真的按键钩子、不显示小条
+        queue = PasteQueueController(store: self.store, pasteboard: pasteboard ?? .general,
+                                     live: !CommandLine.arguments.contains("--selftest"))
+        queue.beforePaste = { [weak watcher] in watcher?.check() }
     }
 
     func activate() {
@@ -26,6 +34,7 @@ final class ClipboardTool: ToolModule {
             guard let self else { return }
             let item = self.store.add(snapshot)
             if item.kind == .image, item.copyCount == 1 { self.recognizeText(in: item) }
+            self.queue.didCopy(item)                                  // 连续粘贴开着、还没开始贴：排到队尾
         }
         watcher.start()
     }
@@ -67,6 +76,7 @@ final class ClipboardTool: ToolModule {
         let p = ClipboardPanel(store: store)
         p.onPaste = { [weak self] item, plain in self?.paste(item, plainText: plain) }
         p.onPin = { [weak self] item in self?.pin(item) }
+        p.onQueue = { [weak self] items in self?.queue.start(with: items) }
         return p
     }
 
@@ -96,6 +106,14 @@ final class ClipboardTool: ToolModule {
         onPin?(pb)
     }
 
+    func openIgnoreList() {
+        if let w = ignoreWindow { w.show(); return }
+        let w = ClipboardIgnoreWindow()
+        w.onClose = { [weak self] in self?.ignoreWindow = nil }
+        ignoreWindow = w
+        Task { @MainActor in w.show() }
+    }
+
     // MARK: 菜单
 
     func menuItems() -> [NSMenuItem] {
@@ -111,6 +129,26 @@ final class ClipboardTool: ToolModule {
         })
         if !hotKeyRegistered {
             items.append(.info("⚠︎ 快捷键 \(combo.display) 没注册上，可能被别的软件占用，换一个试试"))
+        }
+        // 连续粘贴（台阶 14）
+        if queue.isActive {
+            items.append(ActionMenuItem("结束连续粘贴（已贴 \(queue.taken) / \(queue.queue.count)）") { [weak self] in self?.queue.finish() })
+        } else {
+            items.append(ActionMenuItem("开始连续粘贴（按顺序复制几段，⌘V 一条条贴）") { [weak self] in
+                if self?.queue.start() == true { Toast.show("按顺序复制几段，再到要填的地方一次次按 ⌘V", seconds: 3) }
+            })
+        }
+        // 不记当前软件（台阶 14）：菜单打开时最前面那个软件
+        if let app = ClipboardIgnoreList.frontApp, let id = app.bundleIdentifier {
+            let name = app.localizedName ?? id
+            if ClipboardIgnoreList.contains(id) {
+                items.append(ActionMenuItem("已不记「\(name)」复制的内容（点这里恢复记录）") { ClipboardIgnoreList.remove(id) })
+            } else {
+                items.append(ActionMenuItem("不记「\(name)」复制的内容") {
+                    ClipboardIgnoreList.add(id)
+                    Toast.show("✓ 以后「\(name)」复制的不进剪贴板历史")
+                })
+            }
         }
         // 暂停着、自动粘贴没开：第一层也提醒一下
         if Settings.clipboardPaused {
@@ -132,8 +170,9 @@ final class ClipboardTool: ToolModule {
         pause.state = Settings.clipboardPaused ? .on : .off
         items.append(pause)
         if store.unpinnedCount > 0 {
-            items.append(ActionMenuItem("清空历史（保留置顶的）") { [weak self] in self?.store.clearUnpinned() })
+            items.append(ActionMenuItem("清空历史（保留收藏的）") { [weak self] in self?.store.clearUnpinned() })
         }
+        items.append(ActionMenuItem("不记录这些软件…（\(ClipboardIgnoreList.ids.count) 个）") { [weak self] in self?.openIgnoreList() })
         if ClipboardPaster.canAutoPaste { items.append(.info("自动粘贴：已开启")) }
 
         let keyMenu = NSMenu()

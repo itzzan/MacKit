@@ -40,6 +40,7 @@ final class ClipboardWatcher {
         case .failure(let why):
             if why == .ignored { Log.app.notice("clipboard: skipped concealed/transient content") }
             if why == .tooBig { Log.app.notice("clipboard: skipped content over 20 MB") }
+            if why == .ignoredApp { Log.app.notice("clipboard: skipped an app on the ignore list") }
         }
     }
 }

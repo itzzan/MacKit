@@ -350,6 +350,12 @@ enum Settings {
         }
     }
 
+    /// 不记录这些软件复制的内容（台阶 14，存软件的身份编号）。第一次就有钥匙串访问
+    static var clipboardIgnoredApps: [String] {
+        get { store.stringArray(forKey: "clipboard.ignoredApps") ?? ["com.apple.keychainaccess"] }
+        set { store.set(newValue, forKey: "clipboard.ignoredApps") }
+    }
+
     static var colorAsHex: Bool {
         get { store.object(forKey: "color.hex") as? Bool ?? true }
         set { store.set(newValue, forKey: "color.hex") }

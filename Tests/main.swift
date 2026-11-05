@@ -470,5 +470,21 @@ check(PinGeometry.size(after: .rotateLeft, CGSize(width: 300, height: 200)) == C
       && PinGeometry.rotatedFrame(CGRect(x: 100, y: 100, width: 300, height: 200)) == CGRect(x: 150, y: 50, width: 200, height: 300),
       "转 90° 后贴图以中心为准宽高对调")
 
+// MARK: 连续粘贴的队伍（台阶 14）
+var pq = PasteQueue<String>()
+pq.append("张三"); pq.append("男")
+check(pq.count == 2 && !pq.started && pq.upcoming == "张三", "连续粘贴：还没开始贴时，复制的按顺序排队")
+check(pq.take() == "张三" && pq.started && pq.upcoming == "男", "按 ⌘V：拿出第一条，下一条是第二条")
+check(!pq.append("28") && pq.count == 2, "开始贴以后再复制的不进队伍（不打乱）")
+check(pq.take() == "男" && pq.isFinished && pq.take() == nil, "贴完最后一条就结束，再按也没有了")
+var prefilled = PasteQueue(["一", "二", "三"])
+check(prefilled.append("四") && prefilled.count == 4, "小窗口里点选的排好后、还没贴之前，新复制的接到队尾")
+_ = prefilled
+check(ClipboardText.queueStatus(taken: 0, count: 0, upcoming: nil).contains("按顺序复制")
+      && ClipboardText.queueStatus(taken: 0, count: 3, upcoming: "张三").hasPrefix("连续粘贴：已排 3 条")
+      && ClipboardText.queueStatus(taken: 1, count: 3, upcoming: "这是一段很长很长很长很长的文字内容").hasSuffix("…")
+      && ClipboardText.queueStatus(taken: 1, count: 3, upcoming: "男").hasPrefix("连续粘贴 2 / 3")
+      && ClipboardText.queueStatus(taken: 3, count: 3, upcoming: nil) == "连续粘贴完了", "连续粘贴小条上的字")
+
 print(failures == 0 ? "UNIT TESTS OK" : "UNIT TESTS FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)

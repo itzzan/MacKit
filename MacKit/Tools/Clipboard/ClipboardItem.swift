@@ -29,7 +29,16 @@ struct ClipboardItem: Codable, Identifiable, Equatable {
     var firstCopied: Date
     var lastCopied: Date
     var copyCount: Int
+    /// 收藏（台阶 14 起"置顶"升级成"收藏"，存盘的名字没改，老的置顶自动算收藏）
     var pinned: Bool
+    /// 收藏时起的名字（"公司地址"），没起就是 nil
+    var favoriteName: String? = nil
+    /// 在收藏栏里排第几（小的在前）；老文件里没有，按原来的先后
+    var favoriteOrder: Int? = nil
+
+    var isFavorite: Bool { pinned }
+    /// 列表里显示的名字：起了名字用名字
+    var displayTitle: String { favoriteName ?? title }
 }
 
 /// 刚从剪贴板读到、还没存的内容
@@ -60,13 +69,16 @@ enum ClipboardReader {
         "com.typeit4me.clipping", "Pasteboard generator type",
     ]
 
-    enum Skip: Error, Equatable { case empty, ignored, ownRestore, tooBig }
+    enum Skip: Error, Equatable { case empty, ignored, ownRestore, tooBig, ignoredApp }
 
-    static func read(_ pb: NSPasteboard, source: NSRunningApplication? = NSWorkspace.shared.frontmostApplication)
-        -> Result<ClipboardSnapshot, Skip> {
+    /// ignoredApps：名单里的软件复制的不记（台阶 14）
+    static func read(_ pb: NSPasteboard, source: NSRunningApplication? = NSWorkspace.shared.frontmostApplication,
+                     ignoredApps: Set<String>? = nil) -> Result<ClipboardSnapshot, Skip> {
+        let ignoredApps = ignoredApps ?? Set(Settings.clipboardIgnoredApps)
         let allTypes = Set((pb.types ?? []).map(\.rawValue))
         if allTypes.contains(restoreMarker.rawValue) { return .failure(.ownRestore) }
         if !allTypes.isDisjoint(with: ignoredTypes) { return .failure(.ignored) }
+        if let id = source?.bundleIdentifier, ignoredApps.contains(id) { return .failure(.ignoredApp) }
         guard let pbItems = pb.pasteboardItems, !pbItems.isEmpty else { return .failure(.empty) }
 
         var items: [[(type: String, data: Data)]] = []
