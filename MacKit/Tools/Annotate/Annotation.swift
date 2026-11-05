@@ -182,6 +182,13 @@ final class AnnotationDocument {
         items.remove(at: index)
     }
 
+    /// 清空（屏幕画笔的"清空"，台阶 16）：能撤销
+    func removeAll() {
+        guard !items.isEmpty else { return }
+        record()
+        items.removeAll()
+    }
+
     // 拖动选中的标注：拖之前存一份，拖的过程中不记撤销，松手才算一步（台阶 12）
     private var liveBase: [Annotation]?
 

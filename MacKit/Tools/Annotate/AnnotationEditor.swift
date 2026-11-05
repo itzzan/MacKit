@@ -79,6 +79,7 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
         toolbar.onRecognize = { [weak self] in self?.onRecognize?() }
         toolbar.onLongShot = { [weak self] in self?.onLongShot?() }
         toolbar.onBeautify = { [weak self] in self?.onBeautify?() }
+        toolbar.onClear = { [weak self] in self?.clearAll() }
         toolbar.onCancel = { [weak self] in self?.onCancel?() }
         toolbar.onDone = { [weak self] in self?.onDone?() }
         refresh()
@@ -138,6 +139,20 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
         guard !isEditingText else { return }
         document.redo()
         selectedIndex = nil
+        refresh()
+    }
+
+    /// 文档从外面整个换过（屏幕画笔收起时清空、连撤销记录也清掉）：重画一遍
+    func reloadFromDocument() {
+        selectedIndex = nil
+        refresh()
+    }
+
+    /// 清空画的（屏幕画笔，台阶 16）
+    func clearAll() {
+        commitText()
+        selectedIndex = nil
+        document.removeAll()
         refresh()
     }
 

@@ -173,6 +173,12 @@ final class AnnotationToolbar: NSView {
     enum Mode {
         case screenshot      // 截图：📌 贴图、💾 另存、✕ 取消、✓ 完成
         case pin             // 贴图上标注：✕ 放弃这次画的、✓ 完成
+        case liveDraw        // 屏幕画笔（台阶 16）：🗑 清空、✓ 收起；没有马赛克、模糊、文字（屏幕是活的）
+    }
+
+    /// 这种模式下有哪些工具
+    static func tools(for mode: Mode) -> [AnnotationTool] {
+        mode == .liveDraw ? [.pen, .highlighter, .arrow, .rect, .ellipse, .number] : AnnotationTool.allCases
     }
 
     var onTool: ((AnnotationTool) -> Void)?
@@ -185,6 +191,7 @@ final class AnnotationToolbar: NSView {
     var onRecognize: (() -> Void)?
     var onLongShot: (() -> Void)?
     var onBeautify: (() -> Void)?
+    var onClear: (() -> Void)?
     var onCancel: (() -> Void)?
     var onDone: (() -> Void)?
 
@@ -209,7 +216,7 @@ final class AnnotationToolbar: NSView {
         addSubview(background)
 
         var tools: [NSView] = []
-        for tool in AnnotationTool.allCases {
+        for tool in Self.tools(for: mode) {
             let button = ToolbarButton(symbol: tool.symbol, tip: "\(tool.title)（\(tool.key.uppercased())）") { [weak self] in
                 self?.onTool?(tool)
             }
@@ -232,12 +239,18 @@ final class AnnotationToolbar: NSView {
         let cancel = ToolbarButton(symbol: "xmark", tip: mode == .pin ? "放弃这次画的（Esc）" : "取消（Esc）") { [weak self] in
             self?.onCancel?()
         }
-        let done = ToolbarButton(symbol: "checkmark", tip: mode == .pin ? "完成标注（回车）" : "完成：复制并保存（回车）",
+        let done = ToolbarButton(symbol: "checkmark", tip: mode == .liveDraw ? "收起画笔（⌃⇧D 或 Esc）"
+                                 : mode == .pin ? "完成标注（回车）" : "完成：复制并保存（回车）",
                                  style: .primary) { [weak self] in
             self?.onDone?()
         }
 
-        let actions: [NSView] = mode == .pin ? [cancel, done] : [recognize, longShot, beautify, pin, save, cancel, done]
+        let clear = ToolbarButton(symbol: "trash", tip: "清空画的") { [weak self] in self?.onClear?() }
+        let actions: [NSView] = switch mode {
+        case .pin: [cancel, done]
+        case .liveDraw: [clear, done]
+        case .screenshot: [recognize, longShot, beautify, pin, save, cancel, done]
+        }
         hasPinAndSave = mode == .screenshot
         let mainRow = NSStackView(views: tools + [Self.divider(), undoButton, redoButton, Self.divider()] + actions)
         mainRow.orientation = .horizontal

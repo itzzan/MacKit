@@ -28,8 +28,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let keepAwake = KeepAwakeTool()
     private let windowTips = WindowTipsTool()
     private let beautify = BeautifyTool()
+    private let screenPen = ScreenPenTool()
     private lazy var modules: [ToolModule] = [status, screenshot, longShot, pin, clipboard, recorder, ocr, measure,
-                                              keepAwake, windowTips, beautify]
+                                              keepAwake, windowTips, beautify, screenPen]
     /// 菜单分组（台阶 10）：每组一个小标题，常用操作放第一层，设置收进这一组最后的"设置"子菜单
     private struct MenuGroup {
         let title: String
@@ -42,7 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         MenuGroup(title: "录屏", modules: [recorder], settingsTitle: "录屏设置"),
         MenuGroup(title: "剪贴板", modules: [clipboard], settingsTitle: "剪贴板设置"),
         MenuGroup(title: "识别", modules: [ocr, measure], settingsTitle: "识别设置"),
-        MenuGroup(title: "小工具", modules: [keepAwake, windowTips], settingsTitle: nil),
+        MenuGroup(title: "小工具", modules: [keepAwake, screenPen, windowTips], settingsTitle: nil),
     ]
     /// 菜单栏图标：录屏中显示红点和时长（优先），防休眠时是咖啡杯，平常是扳手
     private var recordingText: String?
@@ -71,6 +72,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if CommandLine.arguments.contains("--style-preview") {
             StylePreview.run(arguments: CommandLine.arguments)
+            return
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--pen-smoke"), CommandLine.arguments.indices.contains(i + 1) {
+            PenSmokeTest.run(resultPath: CommandLine.arguments[i + 1])
             return
         }
         if let i = CommandLine.arguments.firstIndex(of: "--longshot-smoke"), CommandLine.arguments.indices.contains(i + 1) {
@@ -114,6 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         screenshot.onBeautify = { [weak self] result in self?.beautify.open(result.image, pointSize: result.pointSize) }
         pin.onBeautify = { [weak self] image, size in self?.beautify.open(image, pointSize: size) }
         beautify.onPin = { [weak self] image, size in self?.pin.pinImage(image, pointSize: size) }
+        screenPen.isRecordingBusy = { [weak self] in self?.recorder.isBusy ?? false }
         keepAwake.dryRun = selfTest                 // 自检时录屏状态变来变去，别真的去挡系统休眠
         recorder.onBusyChange = { [weak self] busy in self?.keepAwake.setRecording(busy) }
         keepAwake.onChange = { [weak self] on in

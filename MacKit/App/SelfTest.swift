@@ -52,6 +52,7 @@ enum SelfTest {
         testRecordingOverlays(recorder)
         testRecognize()
         testTranslateAndColors()
+        testScreenPen(recorder: recorder)
         testLongShot(menu: statusItem.menu)
         testMisc(menu: statusItem.menu, recorder: recorder)
         testTheme()
@@ -1085,6 +1086,84 @@ enum SelfTest {
         check(shotTool.menuItems().contains { $0.title == "最近的颜色（2 个）" }, "截图那一组里有\u{201C}最近的颜色\u{201D}")
         Settings.recentColors = []
         check(!shotTool.menuItems().contains { $0.title.hasPrefix("最近的颜色") }, "没取过颜色：不显示这一项")
+    }
+
+    // MARK: 屏幕画笔（台阶 16）：不显示、不抢键盘
+
+    private static func testScreenPen(recorder: RecorderTool) {
+        let tools = AnnotationToolbar.tools(for: .liveDraw)
+        let bar = AnnotationToolbar(mode: .liveDraw, standalone: true)
+        check(tools == [.pen, .highlighter, .arrow, .rect, .ellipse, .number] && Set(bar.toolButtons.keys) == Set(tools)
+              && findButton(in: bar) { $0.toolTip == "清空画的" } != nil, "画笔的小工具：没有马赛克、模糊、文字，有\u{201C}清空\u{201D}")
+
+        let pen = ScreenPenSession(region: CGRect(x: 100, y: 100, width: 400, height: 300), present: false)
+        var changes: [Bool] = []
+        pen.onChange = { changes.append($0) }
+        check(!pen.isDrawing && pen.editor.tool == .pen, "画笔一开始收着，工具是画笔")
+        pen.begin()
+        // 2026-11-05 验收：全透明的画布点击会穿过去，鼠标不变十字、画不了
+        if let catcher = pen.overlay.contentView as? ScreenPenCatcherView, let shot = render(catcher) {
+            check(!pen.overlay.ignoresMouseEvents && pixelAlpha(shot, x: 5, y: 5) > 0,
+                  "画布明确接鼠标，底色不是全透明（点击不会穿过去）")
+        } else {
+            check(!pen.overlay.ignoresMouseEvents && pen.overlay.contentView is ScreenPenCatcherView, "画布明确接鼠标，有接点击的底")
+        }
+        func stroke(_ y: CGFloat) {
+            pen.input.mouseDown(with: mouse(.leftMouseDown, 50, y))
+            pen.input.mouseDragged(with: mouse(.leftMouseDragged, 120, y + 10))
+            pen.input.mouseUp(with: mouse(.leftMouseUp, 200, y + 20))
+        }
+        stroke(50)
+        stroke(150)
+        check(pen.isDrawing && changes == [true] && pen.editor.document.items.count == 2, "打开画笔：画了两笔")
+        _ = pen.input.performKeyEquivalent(with: key("z", code: 6, mods: .command))
+        check(pen.editor.document.items.count == 1, "⌘Z 撤销一笔")
+        pen.editor.toolbar.onClear?()
+        check(pen.editor.document.items.isEmpty, "点\u{201C}清空\u{201D}：全没了")
+        _ = pen.input.performKeyEquivalent(with: key("z", code: 6, mods: .command))
+        check(pen.editor.document.items.count == 1, "清空了也能撤销回来")
+        stroke(220)
+        pen.input.keyDown(with: key("\u{1b}", code: 53))
+        check(pen.isDrawing, "刚画完那一笔还选着：第一下 Esc 只取消选中")
+        pen.input.keyDown(with: key("\u{1b}", code: 53))
+        check(!pen.isDrawing && changes == [true, false] && pen.editor.document.items.isEmpty && !pen.editor.document.canUndo,
+              "再按 Esc：画笔收起，画的一起清掉（撤销记录也清掉）")
+        pen.toggle()
+        check(pen.isDrawing, "再打开：接着能画")
+        pen.close()
+
+        // 录屏里：开始录时造好画笔，它的小工具列进"不录"名单，画布本身要录进去
+        if let screen = NSScreen.main {
+            let target = RecordTarget.region(id: screen.displayID ?? CGMainDisplayID(), screenFrame: screen.frame,
+                                             viewRect: CGRect(x: 100, y: 100, width: 300, height: 200))
+            recorder.preparePen(for: target, present: false)
+            if let p = recorder.pen {
+                check(recorder.excludedWindows.contains(p.toolbarWindowNumber)
+                      && !recorder.excludedWindows.contains(CGWindowID(p.overlay.windowNumber)) && p.region == target.globalFrame,
+                      "录屏时：画笔盖在录制区域上，小工具不录进去，画的录进去")
+            } else { check(false, "录屏时造好画笔") }
+            recorder.reset()
+            check(recorder.pen == nil, "录完：画笔收掉")
+        }
+        let hud = RecordingHUD(systemAudio: false, microphone: false)
+        hud.setPenOn(true)
+        check(hud.buttons["pen"]?.isSelectedLook == true && hud.buttons["pen"]?.toolTip?.contains("⌃⇧D") == true,
+              "录制小条上有\u{201C}画笔\u{201D}按钮，开着时亮")
+        let free = HotKeyCenter.shared.register(ScreenPenHotKey.combo) {}
+        check(free != nil, "平时不占 ⌃⇧D（只在录屏或开着屏幕画笔时才注册）")
+        if let free { HotKeyCenter.shared.unregister(free) }
+
+        // 菜单"小工具 → 屏幕画笔"
+        let tool = ScreenPenTool()
+        check(tool.menuItems().first?.title.hasPrefix("屏幕画笔") == true, "菜单里有\u{201C}屏幕画笔\u{201D}")
+        tool.isRecordingBusy = { true }
+        tool.start(present: false)
+        check(!tool.isOn, "录屏中点屏幕画笔：提示去用录制小条上的画笔")
+        tool.isRecordingBusy = { false }
+        tool.start(present: false)
+        check(tool.isOn && tool.menuItems().first?.title.hasPrefix("收起屏幕画笔") == true, "平时打开屏幕画笔；菜单里变成\u{201C}收起\u{201D}")
+        tool.stop()
+        check(!tool.isOn && tool.session == nil, "收起屏幕画笔")
     }
 
     // MARK: 剪贴板加强（台阶 14）：收藏、不记某些软件、连续粘贴。私有剪贴板、临时文件夹，不碰你的历史
@@ -2313,6 +2392,61 @@ enum LongShotSmokeTest {
             let ms = Date().timeIntervalSince(start) * 1000 / 13
             lines.append(String(format: "速度：1600×1600 的画面拼一张平均 %.0f 毫秒（每秒 8 张要在 125 毫秒内），接上 %d/12 段", ms, appended))
             ok = ok && ms < 125 && appended == 12 && stitcher.result()?.height == total
+            finish(lines, ok, resultPath)
+        }
+    }
+
+    private static func finish(_ lines: [String], _ ok: Bool, _ path: String) {
+        try? (lines + [ok ? "SMOKE OK" : "SMOKE FAILED"]).joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        exit(ok ? 0 : 1)
+    }
+}
+
+/// 屏幕画笔实录检查：MacKit --pen-smoke <结果文件>（台阶 16）
+/// 真的录屏幕左上角一小块 2 秒，同时用屏幕画笔在那里画一条红线（不收键盘、不弹别的窗口），
+/// 从视频里取一帧看红线在不在；录完删掉视频。要用 open 启动（录屏权限才算在 MacKit 头上）
+@MainActor
+enum PenSmokeTest {
+    static func run(resultPath: String) {
+        Task { @MainActor in
+            var lines: [String] = []
+            var ok = false
+            guard let screen = NSScreen.screens.first, let id = screen.displayID else { finish(["没有屏幕"], false, resultPath); return }
+            let viewRect = CGRect(x: 40, y: screen.frame.height - 60 - 160, width: 240, height: 160)
+            let target = RecordTarget.region(id: id, screenFrame: screen.frame, viewRect: viewRect)
+            let pen = ScreenPenSession(region: target.globalFrame)
+            pen.begin(takeKeyboard: false)
+            pen.editor.document.add(Annotation(tool: .pen, color: .red, size: .thick,
+                                               points: [CGPoint(x: 20, y: 80), CGPoint(x: 120, y: 80), CGPoint(x: 220, y: 80)]))
+            pen.editor.reloadFromDocument()
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mackit-pen-smoke-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let url = dir.appendingPathComponent("pen.mp4")
+            let recorder = ScreenRecorder(url: url)
+            do {
+                try await recorder.start(target: target, options: RecordOptions(systemAudio: false, microphone: false, quality: .original60),
+                                         excluding: [pen.toolbarWindowNumber])
+                try? await Task.sleep(for: .seconds(2))
+                await recorder.stop()
+                let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+                generator.appliesPreferredTrackTransform = true
+                let frame = try await generator.image(at: CMTime(seconds: 1, preferredTimescale: 600)).image
+                var red = 0
+                if let px = PixelBuffer(image: frame) {
+                    for y in stride(from: 0, to: frame.height, by: 2) {
+                        for x in stride(from: 0, to: frame.width, by: 2) {
+                            let c = px.rgb(x, y)
+                            if c.0 > 200 && c.1 < 90 && c.2 < 90 { red += 1 }
+                        }
+                    }
+                }
+                lines.append("实录：视频 \(frame.width)×\(frame.height)，画的红线在画面里找到 \(red) 个红点（抽样）")
+                ok = red > 60
+            } catch {
+                lines.append("实录失败：\(error.localizedDescription)")
+            }
+            pen.close()
             finish(lines, ok, resultPath)
         }
     }

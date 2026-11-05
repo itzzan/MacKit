@@ -519,6 +519,8 @@ final class RecordingHUD {
     var onResume: (() -> Void)?
     var onStartNow: (() -> Void)?
     var onCancel: (() -> Void)?
+    /// 画笔（台阶 16）
+    var onPen: (() -> Void)?
     let panel: NSPanel
     private(set) var mode: Mode = .recording
     private let timeLabel = NSTextField(labelWithString: "00:00")
@@ -563,6 +565,7 @@ final class RecordingHUD {
         make("stop", "stop.fill", "停止", "停止录制（⌘4）", .danger) { [weak self] in self?.onStop?() }
         make("startNow", "play.fill", "现在开始", "不等了，现在开始（⌘4）", .primary) { [weak self] in self?.onStartNow?() }
         make("cancel", "xmark", "取消", "取消这次录屏", .plain) { [weak self] in self?.onCancel?() }
+        make("pen", "pencil.tip", "画笔", "在屏幕上画，录进视频（⌃⇧D）", .plain) { [weak self] in self?.onPen?() }
         setMode(.recording)
     }
 
@@ -572,6 +575,9 @@ final class RecordingHUD {
     var isPulsing: Bool { dot.layer?.animation(forKey: "pulse") != nil }
 
     func update(_ text: String) { timeLabel.stringValue = text }
+
+    /// 画笔开着：按钮亮成主题色
+    func setPenOn(_ on: Bool) { buttons["pen"]?.isSelectedLook = on }
 
     /// 换样子：右边缘不动，宽度跟着变
     func setMode(_ newMode: Mode) {
@@ -601,11 +607,11 @@ final class RecordingHUD {
                 icon.toolTip = tip
                 views.append(icon)
             }
-            views += [Theme.dividerView(), buttons["pause"]!, buttons["stop"]!]
+            views += [Theme.dividerView(), buttons["pen"]!, buttons["pause"]!, buttons["stop"]!]
         case .paused:
             dot.layer?.backgroundColor = NSColor.systemGray.cgColor
             stateLabel.stringValue = "已暂停"
-            views = [dot, stateLabel, timeLabel, Theme.dividerView(), buttons["resume"]!, buttons["stop"]!]
+            views = [dot, stateLabel, timeLabel, Theme.dividerView(), buttons["pen"]!, buttons["resume"]!, buttons["stop"]!]
         case .saving:
             dot.layer?.backgroundColor = NSColor.systemGray.cgColor
             stateLabel.stringValue = "保存中"

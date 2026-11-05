@@ -73,6 +73,9 @@ final class RecorderTool: ToolModule {
     /// 第二批：摄像头画中画、按键牌子
     private(set) var camera: CameraBubble?
     private var keyCaster: KeyCaster?
+    /// 屏幕画笔（台阶 16）：开始录时就造好（它的小工具窗口要列进"不录"名单），⌃⇧D 只在录屏时注册
+    private(set) var pen: ScreenPenSession?
+    private var penHotKeyID: UInt32?
 
     func activate() { registerHotKey() }
 
@@ -254,6 +257,7 @@ final class RecorderTool: ToolModule {
             try? FileManager.default.createDirectory(at: job.tempDirectory, withIntermediateDirectories: true)
             self.job = job
             _ = self.makeHUD(for: target, options: options)
+            self.preparePen(for: target)
             if options.showKeys {
                 let caster = KeyCaster()
                 var isFull = false
@@ -275,6 +279,7 @@ final class RecorderTool: ToolModule {
             if case .scheduled(let t, _) = self?.state { self?.beginCountdown(t) }
         }
         h.onCancel = { [weak self] in self?.reset() }
+        h.onPen = { [weak self] in self?.togglePen() }
         var isFullScreen = false
         if case .display = target { isFullScreen = true }
         h.show(near: target.globalFrame, on: Self.screen(containing: target.globalFrame), fullScreen: isFullScreen)
@@ -293,7 +298,7 @@ final class RecorderTool: ToolModule {
         job.recorder = recorder
         do {
             // 小条和红框从画面里排除
-            let excluded = [hud?.windowNumber, border?.windowNumber].compactMap { $0 }
+            let excluded = excludedWindows
             try await recorder.start(target: job.target, options: job.options, excluding: excluded)
             state = .recording
             hud?.setMode(.recording)
@@ -467,8 +472,47 @@ final class RecorderTool: ToolModule {
         onIndicator?("⏰ " + left)
     }
 
+    /// 录的时候不进画面的 MacKit 窗口：录制小条、红框、画笔的小工具（画布本身要录进去）
+    var excludedWindows: [CGWindowID] {
+        [hud?.windowNumber, border?.windowNumber, pen?.toolbarWindowNumber].compactMap { $0 }
+    }
+
+    // MARK: 屏幕画笔（台阶 16）
+
+    /// present = false 只给自检用：不显示、不注册快捷键
+    func preparePen(for target: RecordTarget, present: Bool = true) {
+        guard pen == nil else { return }
+        let p = ScreenPenSession(region: target.globalFrame, present: present)
+        p.onChange = { [weak self] on in self?.hud?.setPenOn(on) }
+        pen = p
+        if present, penHotKeyID == nil {
+            penHotKeyID = HotKeyCenter.shared.register(ScreenPenHotKey.combo) { [weak self] in self?.togglePen() }
+        }
+    }
+
+    func togglePen() {
+        guard let pen, let job else { return }
+        if case .window = job.target, !pen.isDrawing {
+            Toast.show("录单个窗口时画的录不进去；想录进去，下次框选区域来录", seconds: 3)
+        }
+        pen.toggle()
+        // 保险：小工具窗口要是没在开录时被排除掉，现在再排除一次
+        if pen.isDrawing, let recorder = job.recorder {
+            let windows = excludedWindows
+            Task { await recorder.updateExclusions(windows, target: job.target) }
+        }
+    }
+
+    private func closePen() {
+        pen?.close()
+        pen = nil
+        if let id = penHotKeyID { HotKeyCenter.shared.unregister(id) }
+        penHotKeyID = nil
+    }
+
     /// 回到什么都没在做的状态，收起所有录屏界面
     func reset() {
+        closePen()
         ticker?.invalidate()
         ticker = nil
         controlBar?.close()

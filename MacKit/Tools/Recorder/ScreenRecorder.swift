@@ -135,6 +135,24 @@ final class ScreenRecorder: NSObject {
         Log.capture.notice("recording started \(plan.width)x\(plan.height)@\(plan.fps) audio=\(options.systemAudio) mic=\(options.microphone)")
     }
 
+    /// 录着录着要多排除几个 MacKit 的窗口（屏幕画笔的小工具，台阶 16）：换一下画面的过滤条件。录单个窗口时不用
+    func updateExclusions(_ windowNumbers: [CGWindowID], target: RecordTarget) async {
+        guard let stream else { return }
+        let id: CGDirectDisplayID
+        switch target {
+        case .display(let d, _), .region(let d, _, _): id = d
+        case .window: return
+        }
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
+              let display = content.displays.first(where: { $0.displayID == id }) else { return }
+        let excluded = content.windows.filter { windowNumbers.contains($0.windowID) }
+        do {
+            try await stream.updateContentFilter(SCContentFilter(display: display, excludingWindows: excluded))
+        } catch {
+            Log.capture.error("update exclusions failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     func stop() async {
         guard let stream else { finish(.success(url)); return }
         do {

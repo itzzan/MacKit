@@ -100,6 +100,7 @@ scripts/install.sh              # 编译、装到 ~/Applications 并启动
 scripts/install.sh --no-open    # 只装不启动
 scripts/smoke-record.sh         # 录屏实录检查：真的录几小段、拼接、转 GIF 再删掉（会短暂出现系统的录屏标志）
 scripts/smoke-longshot.sh       # 长截图实录检查：真的拍屏幕左上角一小块 1.5 秒，看尺寸、量拼接速度（会短暂出现系统的录屏标志）
+scripts/smoke-pen.sh            # 屏幕画笔实录检查：真的录左上角一小块 2 秒并画一条红线，看视频里有没有（会短暂出现系统的录屏标志）
 build/MacKit.app/Contents/MacOS/MacKit --style-preview 输出.png 标题 [左边一栏.png]   # 样张：把各个浮动条、按钮画进一张图（不弹窗口）
 build/MacKit.app/Contents/MacOS/MacKit --welcome-preview 输出.png [dark]   # 把欢迎窗口画成图（不弹窗口、不改设置）
 scripts/make-icon.sh            # 重画 App 图标（用代码画，打包成 MacKit/Resources/AppIcon.icns）
