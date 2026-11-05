@@ -1,11 +1,13 @@
 import AppKit
+import CoreImage
 
-/// 马赛克用的"打过码"的整屏画面，按格子大小缓存。
+/// 马赛克、模糊用的"打过码"的整屏画面，按格子大小 / 模糊程度缓存。
 /// 格子按屏幕左上角对齐，所以屏幕上看到的和导出的一模一样。
 final class MosaicSource {
     let image: CGImage
     let viewSize: CGSize
     private var cache: [Int: CGImage] = [:]
+    private var blurCache: [Int: CGImage] = [:]
 
     init(image: CGImage, viewSize: CGSize) {
         self.image = image
@@ -32,6 +34,18 @@ final class MosaicSource {
         big.draw(smallImage, in: CGRect(x: 0, y: 0, width: sw * block, height: sh * block))
         let result = big.makeImage()
         cache[block] = result
+        return result
+    }
+
+    /// 整张画面做高斯模糊（台阶 12）。边缘先往外延伸再模糊，框贴着屏幕边时也不会发黑
+    func blurred(radiusPoints: CGFloat) -> CGImage? {
+        let radius = max(Int((radiusPoints * pixelsPerPoint).rounded()), 1)
+        if let hit = blurCache[radius] { return hit }
+        let input = CIImage(cgImage: image)
+        let output = input.clampedToExtent().applyingGaussianBlur(sigma: Double(radius)).cropped(to: input.extent)
+        let space = image.colorSpace.flatMap { $0.supportsOutput ? $0 : nil } ?? CGColorSpace(name: CGColorSpace.sRGB)!
+        guard let result = CIContext().createCGImage(output, from: input.extent, format: .RGBA8, colorSpace: space) else { return nil }
+        blurCache[radius] = result
         return result
     }
 
@@ -119,6 +133,12 @@ enum AnnotationRenderer {
             ctx.clip(to: a.box)
             ctx.interpolationQuality = .none
             ctx.draw(pixelated, in: mosaic.drawRect(for: pixelated))
+
+        case .blur:
+            guard let mosaic, let blurred = mosaic.blurred(radiusPoints: a.size.blurRadius) else { return }
+            ctx.clip(to: a.box)
+            ctx.interpolationQuality = .high
+            ctx.draw(blurred, in: mosaic.drawRect(for: blurred))
 
         case .text:
             let rect = AnnotationText.rect(for: a)

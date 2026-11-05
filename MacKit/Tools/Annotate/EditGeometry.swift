@@ -65,6 +65,59 @@ enum EditGeometry {
         return CGPoint(x: x, y: max(s.minY + gap, bounds.minY + 4))
     }
 
+    // MARK: 点没点中画好的东西、挪动、拉伸（台阶 12）
+
+    /// 点到线段的距离
+    static func distance(_ p: CGPoint, toSegment a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let len2 = dx * dx + dy * dy
+        guard len2 > 0 else { return hypot(p.x - a.x, p.y - a.y) }
+        let t = min(max(((p.x - a.x) * dx + (p.y - a.y) * dy) / len2, 0), 1)
+        return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+    }
+
+    /// 点到一串折线的距离（画笔、荧光笔）
+    static func distance(_ p: CGPoint, toPolyline pts: [CGPoint]) -> CGFloat {
+        guard let first = pts.first else { return .infinity }
+        guard pts.count > 1 else { return hypot(p.x - first.x, p.y - first.y) }
+        var best = CGFloat.infinity
+        for i in 1..<pts.count { best = min(best, distance(p, toSegment: pts[i - 1], pts[i])) }
+        return best
+    }
+
+    /// 点到矩形四条边的距离（框里面的空白不算点中）
+    static func distance(_ p: CGPoint, toRectOutline r: CGRect) -> CGFloat {
+        let c = [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY),
+                 CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY)]
+        return distance(p, toPolyline: c + [c[0]])
+    }
+
+    /// 点到椭圆那一圈的距离（用 72 段折线近似，误差远小于手的抖动）
+    static func distance(_ p: CGPoint, toEllipseOutline r: CGRect) -> CGFloat {
+        let pts = (0...72).map { i -> CGPoint in
+            let t = CGFloat(i) / 72 * 2 * .pi
+            return CGPoint(x: r.midX + r.width / 2 * cos(t), y: r.midY + r.height / 2 * sin(t))
+        }
+        return distance(p, toPolyline: pts)
+    }
+
+    /// 一串点的外框
+    static func bounds(of pts: [CGPoint]) -> CGRect {
+        guard let first = pts.first else { return .null }
+        var r = CGRect(origin: first, size: .zero)
+        for q in pts.dropFirst() { r = r.union(CGRect(origin: q, size: .zero)) }
+        return r
+    }
+
+    /// 把一串点从旧外框等比例搬到新外框（拉伸画笔）。旧外框某个方向是 0（一条直线）就只平移那个方向
+    static func scale(_ pts: [CGPoint], from old: CGRect, to new: CGRect) -> [CGPoint] {
+        pts.map { q in
+            let x = old.width > 0 ? new.minX + (q.x - old.minX) / old.width * new.width : q.x + (new.midX - old.midX)
+            let y = old.height > 0 ? new.minY + (q.y - old.minY) / old.height * new.height : q.y + (new.midY - old.midY)
+            return CGPoint(x: x, y: y)
+        }
+    }
+
     /// 箭头：杆子画到哪里为止，以及三角形头的三个点（尖、左翼、右翼）
     static func arrow(from a: CGPoint, to b: CGPoint, lineWidth: CGFloat)
         -> (shaftEnd: CGPoint, tip: CGPoint, left: CGPoint, right: CGPoint) {

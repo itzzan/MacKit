@@ -277,7 +277,9 @@ final class AnnotationToolbar: NSView {
 
     private static func divider() -> NSView { Theme.dividerView() }
 
-    func update(tool: AnnotationTool?, color: AnnotationColor, size: AnnotationSize, canUndo: Bool, canRedo: Bool) {
+    /// showProperties：没选工具、但选中了一个画好的东西时，也要露出颜色和粗细（台阶 12）
+    func update(tool: AnnotationTool?, color: AnnotationColor, size: AnnotationSize, canUndo: Bool, canRedo: Bool,
+                showProperties: Bool? = nil) {
         for (t, button) in toolButtons { button.isSelectedLook = t == tool }
         for swatch in swatches { swatch.isSelectedLook = swatch.color == color }
         for (i, button) in sizeButtons.enumerated() { button.isSelectedLook = i == size.rawValue }
@@ -285,7 +287,7 @@ final class AnnotationToolbar: NSView {
         redoButton.isEnabled = canRedo
         undoButton.alphaValue = canUndo ? 1 : 0.35
         redoButton.alphaValue = canRedo ? 1 : 0.35
-        propertyRow.isHidden = tool == nil
+        propertyRow.isHidden = !(showProperties ?? (tool != nil))
         layoutSubtreeIfNeeded()
         setFrameSize(stack.fittingSize)
     }

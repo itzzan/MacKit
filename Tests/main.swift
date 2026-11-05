@@ -391,5 +391,26 @@ check(SystemText.remaining(42 * 60) == "还剩 42 分钟" && SystemText.remainin
       && SystemText.remaining(72 * 60) == "还剩 1 小时 12 分钟" && SystemText.remaining(120 * 60) == "还剩 2 小时"
       && SystemText.remaining(59) == "还剩不到 1 分钟", "防休眠还剩多久")
 
+// MARK: 标注升级：点没点中、挪动、拉伸
+check(EditGeometry.distance(CGPoint(x: 5, y: 3), toSegment: CGPoint(x: 0, y: 0), CGPoint(x: 10, y: 0)) == 3
+      && EditGeometry.distance(CGPoint(x: 13, y: 4), toSegment: CGPoint(x: 0, y: 0), CGPoint(x: 10, y: 0)) == 5
+      && EditGeometry.distance(CGPoint(x: 3, y: 4), toSegment: .zero, .zero) == 5, "点到线段的距离（线段外面算到端点）")
+check(EditGeometry.distance(CGPoint(x: 10, y: 12), toPolyline: [CGPoint(x: 0, y: 0), CGPoint(x: 10, y: 0), CGPoint(x: 10, y: 10)]) == 2
+      && EditGeometry.distance(.zero, toPolyline: []) == .infinity, "点到画笔折线的距离")
+let outline = CGRect(x: 0, y: 0, width: 100, height: 60)
+check(EditGeometry.distance(CGPoint(x: 50, y: 30), toRectOutline: outline) == 30
+      && EditGeometry.distance(CGPoint(x: 2, y: 30), toRectOutline: outline) == 2
+      && EditGeometry.distance(CGPoint(x: 103, y: 64), toRectOutline: outline) == 5, "框：只认四条边附近，框里面的空白不算点中")
+check(abs(EditGeometry.distance(CGPoint(x: 100, y: 30), toEllipseOutline: outline) - 0) < 0.5
+      && abs(EditGeometry.distance(CGPoint(x: 50, y: 30), toEllipseOutline: outline) - 30) < 0.5, "椭圆：认那一圈，中心不算")
+check(EditGeometry.bounds(of: [CGPoint(x: 5, y: 9), CGPoint(x: -3, y: 2), CGPoint(x: 7, y: 4)]) == CGRect(x: -3, y: 2, width: 10, height: 7)
+      && EditGeometry.bounds(of: []).isNull, "一串点的外框")
+check(EditGeometry.scale([CGPoint(x: 0, y: 0), CGPoint(x: 10, y: 20)], from: CGRect(x: 0, y: 0, width: 10, height: 20),
+                         to: CGRect(x: 100, y: 100, width: 30, height: 10)) == [CGPoint(x: 100, y: 100), CGPoint(x: 130, y: 110)],
+      "拉伸画笔：所有点等比例搬到新外框")
+check(EditGeometry.scale([CGPoint(x: 5, y: 0), CGPoint(x: 5, y: 10)], from: CGRect(x: 5, y: 0, width: 0, height: 10),
+                         to: CGRect(x: 15, y: 0, width: 4, height: 20)) == [CGPoint(x: 17, y: 0), CGPoint(x: 17, y: 20)],
+      "拉伸一条竖直线：横向只平移，不除以 0")
+
 print(failures == 0 ? "UNIT TESTS OK" : "UNIT TESTS FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)

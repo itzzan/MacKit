@@ -2,7 +2,7 @@ import AppKit
 
 /// 标注工具
 enum AnnotationTool: String, CaseIterable {
-    case rect, ellipse, arrow, pen, highlighter, mosaic, text, number
+    case rect, ellipse, arrow, pen, highlighter, mosaic, blur, text, number
 
     var title: String {
         switch self {
@@ -12,6 +12,7 @@ enum AnnotationTool: String, CaseIterable {
         case .pen: "画笔"
         case .highlighter: "荧光笔"
         case .mosaic: "马赛克"
+        case .blur: "模糊"
         case .text: "文字"
         case .number: "序号"
         }
@@ -26,6 +27,7 @@ enum AnnotationTool: String, CaseIterable {
         case .pen: "p"
         case .highlighter: "h"
         case .mosaic: "m"
+        case .blur: "b"
         case .text: "t"
         case .number: "n"
         }
@@ -39,6 +41,7 @@ enum AnnotationTool: String, CaseIterable {
         case .pen: "pencil"
         case .highlighter: "highlighter"
         case .mosaic: "checkerboard.rectangle"
+        case .blur: "drop.halffull"
         case .text: "textformat"
         case .number: "1.circle"
         }
@@ -89,6 +92,7 @@ enum AnnotationSize: Int, CaseIterable {
     var fontSize: CGFloat { [14, 18, 26][rawValue] }
     var numberDiameter: CGFloat { [20, 26, 34][rawValue] }
     var mosaicBlock: CGFloat { [6, 10, 16][rawValue] }       // 马赛克一格多大（点）
+    var blurRadius: CGFloat { [4, 8, 14][rawValue] }         // 模糊：轻 / 中 / 重（点）
 }
 
 /// 一条标注。坐标是覆盖层视图里的"点"（左下原点），和选区同一套坐标
@@ -110,7 +114,7 @@ struct Annotation: Equatable {
     /// 太小的就当手抖，不留
     var isMeaningful: Bool {
         switch tool {
-        case .rect, .ellipse, .mosaic: return box.width >= 3 && box.height >= 3
+        case .rect, .ellipse, .mosaic, .blur: return box.width >= 3 && box.height >= 3
         case .arrow:
             guard let a = points.first, let b = points.last else { return false }
             return hypot(b.x - a.x, b.y - a.y) >= 5
@@ -178,6 +182,25 @@ final class AnnotationDocument {
         items.remove(at: index)
     }
 
+    // 拖动选中的标注：拖之前存一份，拖的过程中不记撤销，松手才算一步（台阶 12）
+    private var liveBase: [Annotation]?
+
+    func beginLive() { liveBase = items }
+
+    func updateLive(at index: Int, with annotation: Annotation) {
+        guard liveBase != nil, items.indices.contains(index) else { return }
+        items[index] = annotation
+    }
+
+    func endLive() {
+        guard let base = liveBase else { return }
+        liveBase = nil
+        if base != items {
+            undoStack.append(base)
+            redoStack.removeAll()
+        }
+    }
+
     @discardableResult
     func undo() -> Bool {
         guard let previous = undoStack.popLast() else { return false }
@@ -199,5 +222,82 @@ final class AnnotationDocument {
         items.indices.last { i in
             items[i].tool == .text && AnnotationText.rect(for: items[i]).insetBy(dx: -4, dy: -4).contains(p)
         }
+    }
+}
+
+/// 选中、挪动、改大小（台阶 12）。坐标和标注一样是视图里的点，左下原点
+extension Annotation {
+    /// 选中后小方块怎么摆
+    enum Handles { case box, ends, none }
+
+    var handles: Handles {
+        switch tool {
+        case .rect, .ellipse, .mosaic, .blur, .pen, .highlighter: .box
+        case .arrow: .ends
+        case .text, .number: .none
+        }
+    }
+
+    /// 选中时外面那个框
+    var frame: CGRect {
+        switch tool {
+        case .rect, .ellipse, .mosaic, .blur: return box
+        case .arrow, .pen, .highlighter: return EditGeometry.bounds(of: points)
+        case .text: return AnnotationText.rect(for: self)
+        case .number:
+            guard let c = points.first else { return .null }
+            let d = size.numberDiameter
+            return CGRect(x: c.x - d / 2, y: c.y - d / 2, width: d, height: d)
+        }
+    }
+
+    /// 鼠标点在这里算不算点中它：框、圈只认线条附近，箭头和笔画看离线多近，打码、文字、序号认整块
+    func hit(_ p: CGPoint) -> Bool {
+        let slack: CGFloat = 4
+        switch tool {
+        case .rect: return EditGeometry.distance(p, toRectOutline: box) <= size.lineWidth / 2 + slack
+        case .ellipse: return EditGeometry.distance(p, toEllipseOutline: box) <= size.lineWidth / 2 + slack
+        case .arrow:
+            guard let a = points.first, let b = points.last else { return false }
+            return EditGeometry.distance(p, toSegment: a, b) <= size.lineWidth / 2 + slack + 1
+        case .pen: return EditGeometry.distance(p, toPolyline: points) <= size.lineWidth / 2 + slack
+        case .highlighter: return EditGeometry.distance(p, toPolyline: points) <= size.highlighterWidth / 2 + 2
+        case .mosaic, .blur: return box.insetBy(dx: -2, dy: -2).contains(p)
+        case .text: return frame.insetBy(dx: -4, dy: -4).contains(p)
+        case .number:
+            guard let c = points.first else { return false }
+            return hypot(p.x - c.x, p.y - c.y) <= size.numberDiameter / 2 + 2
+        }
+    }
+
+    func moved(by d: CGVector) -> Annotation {
+        var a = self
+        a.points = points.map { CGPoint(x: $0.x + d.dx, y: $0.y + d.dy) }
+        return a
+    }
+
+    /// 拖外框上的小方块。框类工具改两个角；画笔、荧光笔整串点等比例拉伸
+    func resized(_ handle: SelectionHandle, to p: CGPoint, within bounds: CGRect) -> Annotation {
+        var a = self
+        switch tool {
+        case .rect, .ellipse, .mosaic, .blur:
+            let r = EditGeometry.resize(box, handle: handle, to: p, bounds: bounds)
+            a.points = [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.maxY)]
+        case .pen, .highlighter:
+            let old = frame
+            let r = EditGeometry.resize(old, handle: handle, to: p, bounds: bounds)
+            a.points = EditGeometry.scale(points, from: old, to: r)
+        default:
+            break
+        }
+        return a
+    }
+
+    /// 箭头拖头或尾（0 = 起点，1 = 尖）
+    func withEnd(_ end: Int, at p: CGPoint) -> Annotation {
+        guard tool == .arrow, points.count >= 2 else { return self }
+        var a = self
+        a.points[end == 0 ? 0 : a.points.count - 1] = p
+        return a
     }
 }

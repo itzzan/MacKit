@@ -40,6 +40,7 @@ enum SelfTest {
         testPinContent(pin: pin)
         testAnnotationExport()
         testEditingFlow()
+        testSelectEdit()
         testTextEditing()
         testPinAnnotation()
         testClipboard()
@@ -394,22 +395,26 @@ enum SelfTest {
         check(editor.document.items.filter { $0.tool == .text }.count == 1, "空的输入框不会留下")
 
         let count = editor.document.items.count
-        for tool in [AnnotationTool.ellipse, .arrow, .pen, .highlighter, .mosaic] {
+        // 台阶 12 起按在画好的东西上 = 选中它，所以每样从空白处起笔
+        for (k, tool) in [AnnotationTool.ellipse, .arrow, .pen, .highlighter, .mosaic, .blur].enumerated() {
             editor.selectTool(tool)
-            view.mouseDown(with: mouse(.leftMouseDown, 320, 320))
-            view.mouseDragged(with: mouse(.leftMouseDragged, 360, 340))
-            view.mouseUp(with: mouse(.leftMouseUp, 400, 360))
+            let x = CGFloat(220 + k * 70)
+            view.mouseDown(with: mouse(.leftMouseDown, x, 260))
+            view.mouseDragged(with: mouse(.leftMouseDragged, x + 25, 270))
+            view.mouseUp(with: mouse(.leftMouseUp, x + 50, 280))
         }
-        check(editor.document.items.count == count + 5, "椭圆、箭头、画笔、荧光笔、马赛克各画一下")
-        check(Set(editor.document.items.map(\.tool)) == Set(AnnotationTool.allCases), "八种工具都画上了")
+        check(editor.document.items.count == count + 6, "椭圆、箭头、画笔、荧光笔、马赛克、模糊各画一下")
+        check(Set(editor.document.items.map(\.tool)) == Set(AnnotationTool.allCases), "九种工具都画上了")
 
         editor.selectTool(nil)
         view.keyDown(with: key("\r", code: 36))
         check(done == 1, "回车 = 完成")
-        view.mouseDown(with: mouse(.leftMouseDown, 400, 400, clicks: 2))
-        check(done == 2, "没选工具时在框里双击 = 完成")
+        view.mouseDown(with: mouse(.leftMouseDown, 660, 560, clicks: 2))
+        check(done == 2, "没选工具时在框里空白处双击 = 完成")
         view.keyDown(with: key("\u{1b}", code: 53))
-        check(cancelled == 1, "Esc = 取消")
+        check(cancelled == 0 && editor.selectedIndex == nil, "刚画完的还选着：第一下 Esc 只是取消选中")
+        view.keyDown(with: key("\u{1b}", code: 53))
+        check(cancelled == 1, "再按 Esc = 取消截图")
 
         if let rect = view.currentSelection,
            let out = AnnotationExporter.export(image: image, viewSize: viewSize, selection: rect, screenOrigin: .zero,
@@ -420,6 +425,107 @@ enum SelfTest {
     }
 
     // MARK: 文字工具：拼音看得见、写好的字能再改（2026-11-04 用户验收时提的两个问题）
+
+    /// 台阶 12：点一下画好的东西就选中，能拖、能改大小、能换颜色、能删；模糊打码
+    private static func testSelectEdit() {
+        let viewSize = CGSize(width: 1512, height: 982)
+        let image = makeTestImage(width: 3024, height: 1964)
+        let container = NSView(frame: CGRect(origin: .zero, size: viewSize))
+        let view = SelectionView(frame: container.bounds, image: image, windowRects: [], scale: 2)
+        container.addSubview(view)
+        let mosaic = MosaicSource(image: image, viewSize: viewSize)
+        let editor = AnnotationEditor(container: container, mosaic: mosaic)
+        defer { editor.tearDown() }
+        var cancelled = 0
+        view.onCancel = { cancelled += 1 }
+        view.beginEditing(editor, selection: CGRect(x: 100, y: 100, width: 800, height: 600))
+        editor.setColor(.red)
+        editor.setSize(.medium)
+        func drag(_ from: CGPoint, _ to: CGPoint) {
+            view.mouseDown(with: mouse(.leftMouseDown, from.x, from.y))
+            view.mouseDragged(with: mouse(.leftMouseDragged, (from.x + to.x) / 2, (from.y + to.y) / 2))
+            view.mouseDragged(with: mouse(.leftMouseDragged, to.x, to.y))
+            view.mouseUp(with: mouse(.leftMouseUp, to.x, to.y))
+        }
+
+        view.keyDown(with: key("r", code: 15))
+        drag(CGPoint(x: 200, y: 200), CGPoint(x: 400, y: 300))
+        check(editor.document.items.count == 1 && editor.selectedIndex == 0 && editor.canvas.selectionLook?.handles.count == 8,
+              "画完一个框：自动选中，四周 8 个小方块")
+        editor.selectTool(nil)
+        view.mouseDown(with: mouse(.leftMouseDown, 650, 600)); view.mouseUp(with: mouse(.leftMouseUp, 650, 600))
+        check(editor.selectedIndex == nil && editor.canvas.selectionLook == nil, "点空白处：取消选中")
+        view.mouseDown(with: mouse(.leftMouseDown, 300, 250)); view.mouseUp(with: mouse(.leftMouseUp, 300, 250))
+        check(editor.selectedIndex == nil, "点框里面的空白：不算点中框")
+        check(editor.editCursor(at: CGPoint(x: 201, y: 250)) == .pointingHand && editor.editCursor(at: CGPoint(x: 300, y: 250)) == nil,
+              "鼠标在框的线上变小手，框中间不变")
+
+        drag(CGPoint(x: 200, y: 250), CGPoint(x: 230, y: 240))
+        check(editor.selectedIndex == 0 && editor.document.items[0].box == CGRect(x: 230, y: 190, width: 200, height: 100),
+              "点住框的线拖：整个框挪过去")
+        editor.undo()
+        check(editor.document.items[0].box == CGRect(x: 200, y: 200, width: 200, height: 100), "拖一次 = 撤销一步，回到原处")
+        editor.redo()
+        view.mouseDown(with: mouse(.leftMouseDown, 230, 240)); view.mouseUp(with: mouse(.leftMouseUp, 230, 240))
+        drag(CGPoint(x: 434, y: 294), CGPoint(x: 484, y: 344))
+        check(editor.document.items[0].box == CGRect(x: 230, y: 190, width: 250, height: 150), "拖右上角的小方块：框变大，不会一按就跳")
+        check(editor.toolbar.isShowingProperties, "没选工具、但选中了东西：工具栏露出颜色和粗细")
+        editor.setColor(.blue)
+        editor.setSize(.thick)
+        check(editor.document.items[0].color == .blue && editor.document.items[0].size == .thick, "选中时点颜色、粗细：改的是它")
+        editor.undo()
+        check(editor.document.items[0].size == .medium, "改粗细也能撤销")
+        view.mouseDown(with: mouse(.leftMouseDown, 230, 240)); view.mouseUp(with: mouse(.leftMouseUp, 230, 240))
+        view.keyDown(with: key("", code: 124))
+        check(editor.document.items[0].box.minX == 231, "选中时按方向键：挪 1 点")
+        view.keyDown(with: key("\u{7f}", code: 51))
+        check(editor.document.items.isEmpty, "按 ⌫：删掉选中的")
+        editor.undo()
+        check(editor.document.items.count == 1, "⌘Z：删掉的回来")
+
+        view.keyDown(with: key("a", code: 0))
+        drag(CGPoint(x: 500, y: 450), CGPoint(x: 600, y: 500))
+        check(editor.selectedIndex == 1 && editor.canvas.selectionLook?.round == true && editor.canvas.selectionLook?.handles.count == 2,
+              "箭头选中后只有头尾两个小圆点")
+        drag(CGPoint(x: 600, y: 500), CGPoint(x: 650, y: 450))
+        check(editor.document.items[1].points.first == CGPoint(x: 500, y: 450) && editor.document.items[1].points.last == CGPoint(x: 650, y: 450),
+              "拖箭头的尖：方向和长短跟着变，尾巴不动")
+
+        view.keyDown(with: key("p", code: 35))
+        view.mouseDown(with: mouse(.leftMouseDown, 200, 500))
+        view.mouseDragged(with: mouse(.leftMouseDragged, 220, 520))
+        view.mouseUp(with: mouse(.leftMouseUp, 240, 540))
+        drag(CGPoint(x: 244, y: 544), CGPoint(x: 284, y: 584))
+        check(EditGeometry.bounds(of: editor.document.items[2].points) == CGRect(x: 200, y: 500, width: 80, height: 80)
+              && editor.document.items[2].points.last == CGPoint(x: 280, y: 580), "拖画笔的小方块：整笔等比例变大")
+
+        view.keyDown(with: key("n", code: 45))
+        view.mouseDown(with: mouse(.leftMouseDown, 700, 600)); view.mouseUp(with: mouse(.leftMouseUp, 700, 600))
+        let numbers = editor.document.items.filter { $0.tool == .number }.count
+        view.mouseDown(with: mouse(.leftMouseDown, 702, 601)); view.mouseUp(with: mouse(.leftMouseUp, 702, 601))
+        check(editor.document.items.filter { $0.tool == .number }.count == numbers, "序号工具点在已有的序号上：选中它，不会再放一个")
+
+        view.keyDown(with: key("\u{1b}", code: 53))
+        check(cancelled == 0 && editor.selectedIndex == nil, "有选中的时候按 Esc：只取消选中")
+        view.keyDown(with: key("\u{1b}", code: 53))
+        check(cancelled == 1, "再按 Esc：取消截图")
+
+        // 模糊：框住蓝块的右边缘（视图里蓝块在 x 100–200、y 782–882）
+        let blur = Annotation(tool: .blur, color: .red, size: .medium, points: [CGPoint(x: 150, y: 760), CGPoint(x: 250, y: 860)])
+        let crop = CGRect(x: 50, y: 650, width: 400, height: 300)
+        if let plain = AnnotationExporter.export(image: image, viewSize: viewSize, selection: crop, screenOrigin: .zero,
+                                                 annotations: [], mosaic: mosaic),
+           let blurred = AnnotationExporter.export(image: image, viewSize: viewSize, selection: crop, screenOrigin: .zero,
+                                                   annotations: [blur], mosaic: mosaic) {
+            let edgeBefore = pixel(plain.image, x: 296, y: 260), edgeAfter = pixel(blurred.image, x: 296, y: 260)
+            let farBefore = pixel(plain.image, x: 140, y: 480), farAfter = pixel(blurred.image, x: 140, y: 480)
+            check(abs(edgeAfter.b - edgeBefore.b) + abs(edgeAfter.r - edgeBefore.r) > 30 && farAfter == farBefore,
+                  "模糊：框里蓝块的边糊开了（\(edgeBefore) → \(edgeAfter)），框外一点不变")
+        } else {
+            check(false, "模糊导出")
+        }
+        check(AnnotationTool.forKey("b") == .blur && editor.toolbar.toolButtons[.blur] != nil, "工具栏有\u{201C}模糊\u{201D}，快捷键 B")
+    }
 
     private static func testTextEditing() {
         let viewSize = CGSize(width: 1512, height: 982)
@@ -548,6 +654,8 @@ enum SelfTest {
         second.input.mouseDown(with: mouse(.leftMouseDown, 250, 50))
         second.input.mouseUp(with: mouse(.leftMouseUp, 350, 150))
         check(second.editor.document.items.count == 2, "又画了一个椭圆")
+        second.input.keyDown(with: key("\u{1b}", code: 53))
+        check(pin.isAnnotating && second.editor.selectedIndex == nil, "贴图标注：刚画完的选着，第一下 Esc 只取消选中")
         second.input.keyDown(with: key("\u{1b}", code: 53))
         check(!pin.isAnnotating && pin.document.items.count == 1 && pin.document.items[0].tool == .rect,
               "Esc：这次画的椭圆没了，之前的框还在")
@@ -1474,7 +1582,8 @@ enum SelfTest {
         check(aboutTitles.contains("使用说明（权限、快捷键）…") && aboutTitles.contains("打开项目主页") && aboutTitles.contains("看看有没有新版本")
               && AppLinks.home.absoluteString == "https://github.com/itzzan/MacKit" && AppLinks.releases.path == "/itzzan/MacKit/releases",
               "关于 MacKit：使用说明、项目主页、看看有没有新版本")
-        check(AppInfo.version.hasPrefix("1.0"), "版本号是 \(AppInfo.version)")
+        let parts = AppInfo.version.split(separator: ".").compactMap { Int($0) }
+        check(parts.count == 3 && parts[0] >= 1, "版本号是三段数字、1 以上：\(AppInfo.version)")
     }
 
     private static func testTheme() {

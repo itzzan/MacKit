@@ -61,6 +61,7 @@ final class SelectionView: NSView {
         case resize(SelectionHandle, original: CGRect)
         case move(start: CGPoint, original: CGRect)
         case draw
+        case edit                   // 拖选中的标注（台阶 12）
     }
     private var drag: Drag = .none
 
@@ -307,6 +308,7 @@ final class SelectionView: NSView {
             if editor.canAdjustSelection, let h = EditGeometry.handle(at: p, in: sel) {
                 return NSCursor.frameResize(position: Self.cursorPosition(h), directions: .all)
             }
+            if let c = editor.editCursor(at: p) { return c }                // 画好的东西上：小手；选中那个的小方块：拉伸
             guard sel.contains(p) else { return .arrow }
             if (editor.tool == nil || editor.tool == .text), editor.document.textIndex(at: p) != nil { return .iBeam }
             if let tool = editor.tool { return tool == .text ? .iBeam : .crosshair }
@@ -376,13 +378,16 @@ final class SelectionView: NSView {
             if editor.isEditingText {                                // 点别处 = 打完字
                 editor.commitText()
                 drag = .none
-            } else if event.clickCount >= 2, editor.tool == nil, sel.contains(p) {
+            } else if event.clickCount >= 2, editor.document.textIndex(at: p) != nil {
                 drag = .none
-                if !editor.editText(at: p) {                         // 双击文字 = 接着改
-                    onDone?()                                        // 没选工具时双击框里别处 = 完成
-                }
+                editor.editText(at: p)                               // 双击文字 = 接着改
+            } else if event.clickCount >= 2, editor.tool == nil, sel.contains(p), editor.hitIndex(at: p) == nil {
+                drag = .none
+                onDone?()                                            // 没选工具时双击框里空白处 = 完成
             } else if editor.canAdjustSelection, let h = EditGeometry.handle(at: p, in: sel) {
                 drag = .resize(h, original: sel)
+            } else if !(editor.tool == .text && editor.document.textIndex(at: p) != nil), editor.beginEdit(at: p) {
+                drag = .edit                                         // 点中画好的东西：选中它，拖它
             } else if let tool = editor.tool, sel.contains(p) {
                 editor.mouseDown(at: p)
                 drag = tool.isClickTool ? .none : .draw
@@ -390,6 +395,7 @@ final class SelectionView: NSView {
                 drag = .move(start: p, original: sel)
                 NSCursor.closedHand.set()
             } else {
+                editor.deselect()                                    // 点空白处 = 取消选中
                 drag = .none
             }
         }
@@ -415,6 +421,8 @@ final class SelectionView: NSView {
             setSelection(EditGeometry.move(original, by: CGVector(dx: p.x - start.x, dy: p.y - start.y), within: bounds))
         case .draw:
             editor?.mouseDragged(to: p)
+        case .edit:
+            editor?.dragEdit(to: p)
         }
     }
 
@@ -439,6 +447,9 @@ final class SelectionView: NSView {
             }
         case .draw:
             editor?.mouseUp(at: p)
+        case .edit:
+            editor?.endEdit(at: p)
+            cursor(at: p).set()
         case .move:
             cursor(at: p).set()
         default:
@@ -452,7 +463,11 @@ final class SelectionView: NSView {
 
     override func keyDown(with event: NSEvent) {
         let code = Int(event.keyCode)
-        if code == 53 { onCancel?(); return }                         // Esc
+        if code == 53 {                                               // Esc：有选中的先取消选中，没有就取消截图
+            if mode == .editing, let editor, editor.selectedIndex != nil { editor.deselect(); return }
+            onCancel?()
+            return
+        }
         switch mode {
         case .choosing:
             let arrows: [Int: CGVector] = [123: CGVector(dx: -1, dy: 0), 124: CGVector(dx: 1, dy: 0),
@@ -473,7 +488,12 @@ final class SelectionView: NSView {
             let arrows: [Int: CGVector] = [123: CGVector(dx: -1, dy: 0), 124: CGVector(dx: 1, dy: 0),
                                            125: CGVector(dx: 0, dy: -1), 126: CGVector(dx: 0, dy: 1)]
             if let d = arrows[code] {
+                if editor.nudgeSelected(by: d) { return }             // 选中了画好的东西：挪它
                 if editor.canAdjustSelection { setSelection(EditGeometry.move(sel, by: d, within: bounds)) }
+                return
+            }
+            if code == 51 || code == 117 {                            // ⌫ / Delete：删掉选中的
+                editor.deleteSelected()
                 return
             }
             let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
