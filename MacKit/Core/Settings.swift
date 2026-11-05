@@ -356,6 +356,12 @@ enum Settings {
         set { store.set(newValue, forKey: "clipboard.ignoredApps") }
     }
 
+    /// 最近取过的颜色（台阶 15），0xRRGGBB，最新的在前，最多 20 个
+    static var recentColors: [Int] {
+        get { store.array(forKey: "color.recent") as? [Int] ?? [] }
+        set { store.set(Array(newValue.prefix(ColorHistory.limit)), forKey: "color.recent") }
+    }
+
     static var colorAsHex: Bool {
         get { store.object(forKey: "color.hex") as? Bool ?? true }
         set { store.set(newValue, forKey: "color.hex") }

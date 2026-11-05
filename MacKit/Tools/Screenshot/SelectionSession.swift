@@ -157,7 +157,8 @@ final class SelectionSession {
             view.onCancel = { [weak self] in self?.cancel() }
             view.onDone = { [weak self] in self?.finishCopy() }
             view.onSave = { [weak self] in self?.saveAs() }
-            view.onColorPick = { [weak self] text in
+            view.onColorPick = { [weak self, weak view] text in
+                if let c = view?.pointedColor { RecentColors.record(c.0, c.1, c.2) }       // 记进"最近的颜色"（台阶 15）
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(text, forType: .string)
                 Log.capture.notice("color picked")

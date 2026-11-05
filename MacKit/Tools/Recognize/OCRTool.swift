@@ -21,7 +21,8 @@ final class OCRTool: ToolModule {
         hotKeyRegistered = hotKeyID != nil
     }
 
-    func choose(delay: Double = 0) {
+    /// translate = true：菜单里"识别并翻译"，框完直接出译文（台阶 15）
+    func choose(delay: Double = 0, translate: Bool = false) {
         guard session == nil, !isPreparing, SelectionSession.active == nil, MeasureSession.active == nil else { return }
         guard ScreenPermission.readyToTry() else { return }
         isPreparing = true
@@ -36,7 +37,7 @@ final class OCRTool: ToolModule {
                                          windowIDs: windows.map(\.id), purpose: .recognize)
                 s.onFinish = { [weak self] outcome in
                     self?.session = nil
-                    if case .recognize(let result) = outcome { self?.recognize(result.image) }
+                    if case .recognize(let result) = outcome { self?.recognize(result.image, translate: translate) }
                 }
                 self.session = s
                 s.begin()
@@ -48,7 +49,7 @@ final class OCRTool: ToolModule {
     }
 
     /// 识别一张图（截图工具栏、贴图右键也调这里）
-    func recognize(_ image: CGImage) {
+    func recognize(_ image: CGImage, translate: Bool = false) {
         Toast.show("正在识别文字…", seconds: 10)
         Task { @MainActor in
             let result = await TextRecognizer.recognize(image)
@@ -61,7 +62,8 @@ final class OCRTool: ToolModule {
             } else {
                 Toast.show("这块里没认出文字", seconds: 2)
             }
-            self.showResult(result)
+            let w = self.showResult(result)
+            if translate, !result.text.isEmpty { w.translate() }
         }
     }
 
@@ -82,6 +84,7 @@ final class OCRTool: ToolModule {
         var items: [NSMenuItem] = []
         items.append(ActionMenuItem("识别文字（框选）", key: hotKeyRegistered ? combo.menuKey : "",
                                     modifiers: combo.menuModifiers) { [weak self] in self?.choose(delay: 0.2) })
+        items.append(ActionMenuItem("识别并翻译（框选）") { [weak self] in self?.choose(delay: 0.2, translate: true) })
         if !hotKeyRegistered {
             items.append(.info("⚠︎ 快捷键 \(combo.display) 没注册上，可能被别的软件占用，换一个试试"))
         }

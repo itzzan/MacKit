@@ -486,5 +486,22 @@ check(ClipboardText.queueStatus(taken: 0, count: 0, upcoming: nil).contains("按
       && ClipboardText.queueStatus(taken: 1, count: 3, upcoming: "男").hasPrefix("连续粘贴 2 / 3")
       && ClipboardText.queueStatus(taken: 3, count: 3, upcoming: nil) == "连续粘贴完了", "连续粘贴小条上的字")
 
+// MARK: 识别加强（台阶 15）
+check(TranslateLanguages.defaultTarget(forDetected: "zh-Hans") == "en" && TranslateLanguages.defaultTarget(forDetected: "zh-Hant") == "en"
+      && TranslateLanguages.defaultTarget(forDetected: "en") == "zh-Hans" && TranslateLanguages.defaultTarget(forDetected: "ja") == "zh-Hans"
+      && TranslateLanguages.defaultTarget(forDetected: nil) == "zh-Hans", "翻译方向：中文翻成英文，别的（认不出也算）翻成中文")
+check(TranslateLanguages.name(of: "ja") == "日文" && TranslateLanguages.name(of: "xx") == "xx", "小菜单里的语言名字")
+check(TranslateLanguages.same("zh-Hant", "zh-Hans") && !TranslateLanguages.same("en", "zh-Hans") && !TranslateLanguages.same(nil, "en"),
+      "源语言和目标是同一种：不用翻")
+check(ColorHistory.pack(255, 59, 48) == 0xFF3B30 && ColorHistory.unpack(0xFF3B30) == (255, 59, 48)
+      && ColorHistory.pack(300, -5, 10) == 0xFF000A, "颜色存成一个数，取回来不变；越界的夹到 0–255")
+var recentColors: [Int] = []
+for c in [0x111111, 0x222222, 0x333333] { recentColors = ColorHistory.adding(c, to: recentColors) }
+check(recentColors == [0x333333, 0x222222, 0x111111], "最近的颜色：最新的在最前")
+recentColors = ColorHistory.adding(0x111111, to: recentColors)
+check(recentColors == [0x111111, 0x333333, 0x222222], "同一个颜色再取一次：不记两遍，挪到最前")
+for c in 0..<30 { recentColors = ColorHistory.adding(c, to: recentColors) }
+check(recentColors.count == ColorHistory.limit && recentColors.first == 29, "最多记 20 个")
+
 print(failures == 0 ? "UNIT TESTS OK" : "UNIT TESTS FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)

@@ -51,6 +51,7 @@ enum SelfTest {
         testRecordingExtras(recorder)
         testRecordingOverlays(recorder)
         testRecognize()
+        testTranslateAndColors()
         testLongShot(menu: statusItem.menu)
         testMisc(menu: statusItem.menu, recorder: recorder)
         testTheme()
@@ -995,6 +996,97 @@ enum SelfTest {
         check(thumb != nil && (thumb?.size.width ?? 99) <= 48, "图片在列表里显示成小缩略图")
     }
 
+    // MARK: 识别加强（台阶 15）：翻译（用假的翻译员）、最近的颜色
+
+    @MainActor
+    final class FakeTranslator: TextTranslating {
+        var calls: [(text: String, source: String?, target: String)] = []
+        var failure: TranslateError?
+        var hostView: NSView? { nil }
+        func translate(_ text: String, from source: String?, to target: String) async throws -> String {
+            calls.append((text, source, target))
+            if let failure { throw failure }
+            return "【\(target)】" + text
+        }
+        func cancel() {}
+    }
+
+    private static func testTranslateAndColors() {
+        let pb = NSPasteboard(name: NSPasteboard.Name("local.mackit.selftest.translate.\(UUID().uuidString)"))
+        defer { pb.releaseGlobally() }
+        func spin() { RunLoop.main.run(until: Date().addingTimeInterval(0.2)) }
+
+        let fake = FakeTranslator()
+        let w = OCRResultWindow(result: OCRResult(lines: ["Hello world, this is MacKit."], codes: []), translator: fake)
+        w.pasteboard = pb
+        check(w.buttons["translate"] != nil && w.targetPopup.numberOfItems == TranslateLanguages.targets.count
+              && w.targetPopup.titleOfSelectedItem == "翻成中文" && !w.hasTranslation, "结果窗口有\u{201C}翻译\u{201D}和语言小菜单；英文默认翻成中文")
+        w.translate()
+        spin()
+        check(w.hasTranslation && w.translationView.string == "【zh-Hans】Hello world, this is MacKit."
+              && pb.string(forType: .string) == w.translationView.string, "点翻译：下半部分出译文，译文自动复制")
+        check(w.buttons["copy"]?.title == "复制原文" && w.buttons["copyTranslation"]?.isHidden == false
+              && w.translateStatus.stringValue.contains("已翻成中文"), "出了译文：有\u{201C}复制原文\u{201D}\u{201C}复制译文\u{201D}")
+        w.copyText()
+        check(pb.string(forType: .string) == "Hello world, this is MacKit.", "复制原文")
+        w.pickTarget("ja")
+        spin()
+        check(w.userPickedTarget && fake.calls.last?.target == "ja" && w.translationView.string.hasPrefix("【ja】"), "小菜单换成日文：马上按日文再翻")
+        w.textView.string = "Hello MacKit"
+        w.translate()
+        spin()
+        check(fake.calls.last?.text == "Hello MacKit" && fake.calls.last?.target == "ja", "改了原文再翻：按改过的翻，语言用你选的")
+        fake.failure = .unsupported("日文")
+        w.translate()
+        spin()
+        check(w.translateStatus.stringValue.contains("不支持"), "翻不了：窗口里写明原因")
+
+        let zh = OCRResultWindow(result: OCRResult(lines: ["今天天气不错，我们去公园散步吧。"], codes: []), translator: FakeTranslator())
+        zh.pasteboard = pb
+        check(zh.targetPopup.titleOfSelectedItem == "翻成英文", "中文默认翻成英文")
+
+        // 系统翻译员：同一种语言、空的，不用真去翻；装没装语言只看不弹
+        let system = SystemTranslator()
+        let same = awaitResult { () async -> String in
+            do { _ = try await system.translate("你好", from: "zh-Hans", to: "zh-Hans"); return "翻了" }
+            catch let e as TranslateError { return e.localizedDescription } catch { return "别的错" }
+        }
+        check(same == "已经是中文了，换一种语言试试", "已经是这种语言了：不翻，直接说明")
+        let empty = awaitResult { () async -> Bool in
+            do { _ = try await system.translate("   ", from: nil, to: "en"); return false } catch { return (error as? TranslateError) == .empty }
+        }
+        check(empty == true, "没有字：不翻")
+        if let status = awaitResult(timeout: 5, { await SystemTranslator.status(from: "en", to: "zh-Hans") }) {
+            let text = switch status {
+            case .installed: "已装好"
+            case .supported: "支持，要先下载"
+            case .unsupported: "不支持"
+            @unknown default: "不知道"
+            }
+            info("这台 Mac 上英文 → 中文的翻译：\(text)")
+        }
+        let ocrTool = OCRTool()
+        check(ocrTool.menuItems().contains { $0.title == "识别并翻译（框选）" }, "菜单里有\u{201C}识别并翻译（框选）\u{201D}")
+
+        // 最近的颜色
+        let saved = UserDefaults.standard.object(forKey: "color.recent")
+        defer { if let saved { UserDefaults.standard.set(saved, forKey: "color.recent") } else { UserDefaults.standard.removeObject(forKey: "color.recent") } }
+        Settings.recentColors = []
+        RecentColors.record(255, 59, 48)
+        RecentColors.record(0, 0, 0)
+        RecentColors.record(255, 59, 48)
+        check(Settings.recentColors == [0xFF3B30, 0x000000], "取色：记进最近的颜色，同一个不记两遍、挪到最前")
+        let menu = RecentColors.menuItem()
+        let entries = menu.submenu?.items ?? []
+        check(menu.title == "最近的颜色（2 个）" && entries.first?.title == "#FF3B30" && entries.first?.image != nil
+              && entries.count > 1 && entries[1].title == "255, 59, 48" && entries[1].isAlternate
+              && entries[1].keyEquivalentModifierMask == .option, "菜单里：小色块 + HEX，按住 ⌥ 换成 RGB")
+        let shotTool = ScreenshotTool()
+        check(shotTool.menuItems().contains { $0.title == "最近的颜色（2 个）" }, "截图那一组里有\u{201C}最近的颜色\u{201D}")
+        Settings.recentColors = []
+        check(!shotTool.menuItems().contains { $0.title.hasPrefix("最近的颜色") }, "没取过颜色：不显示这一项")
+    }
+
     // MARK: 剪贴板加强（台阶 14）：收藏、不记某些软件、连续粘贴。私有剪贴板、临时文件夹，不碰你的历史
 
     private static func testClipboardPlus() {
@@ -1751,7 +1843,8 @@ enum SelfTest {
         check(headers == ["系统状态（点一下打开活动监视器）", "截图", "录屏", "剪贴板", "识别", "小工具"],
               "菜单分组有小标题：\(headers.joined(separator: "、"))")
         let rows = menu.items.filter { !$0.isSeparatorItem }
-        check(rows.count <= 30, "菜单第一层 \(rows.count) 行（整理前 40 多行）")
+        // 第二版加了"识别并翻译""开始连续粘贴""不记「当前软件」"；自检环境里还多两行提醒（录屏权限、自动粘贴没开）
+        check(rows.count <= 32, "菜单第一层 \(rows.count) 行（整理前 40 多行；你那边没有那两行提醒）")
         func sub(_ title: String) -> [String] { menu.items.first { $0.title == title }?.submenu.map(allTitles) ?? [] }
         let shot = sub("截图设置")
         check(shot.contains { $0.hasPrefix("截图快捷键") } && shot.contains("截图保存位置") && shot.contains { $0.hasPrefix("贴图快捷键") }

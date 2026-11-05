@@ -180,6 +180,7 @@ final class ScreenshotTool: ToolModule {
         let delayItem = NSMenuItem(title: "延时截图", action: nil, keyEquivalent: "")
         delayItem.submenu = delayMenu
         items.append(delayItem)
+        if !Settings.recentColors.isEmpty { items.append(RecentColors.menuItem()) }
         return items
     }
 
@@ -308,5 +309,54 @@ final class DelayCountdown {
         if let escID { HotKeyCenter.shared.unregister(escID) }
         escID = nil
         window?.close()
+    }
+}
+
+/// 最近取过的颜色（台阶 15）：⌘1 截图时按 C 取的，存最近 20 个（只存颜色数字，不存截图）
+@MainActor
+enum RecentColors {
+    static func record(_ r: Int, _ g: Int, _ b: Int) {
+        Settings.recentColors = ColorHistory.adding(ColorHistory.pack(r, g, b), to: Settings.recentColors)
+    }
+
+    /// 菜单"最近的颜色"：小色块 + HEX，点一下复制；按住 ⌥ 显示 RGB，点了复制 RGB
+    static func menuItem() -> NSMenuItem {
+        let sub = NSMenu()
+        for value in Settings.recentColors {
+            let (r, g, b) = ColorHistory.unpack(value)
+            let hex = ColorText.hex(r, g, b), rgb = ColorText.rgb(r, g, b)
+            let main = ActionMenuItem(hex) { copy(hex) }
+            main.image = swatch(r, g, b)
+            let alt = ActionMenuItem(rgb, modifiers: .option) { copy(rgb) }
+            alt.image = swatch(r, g, b)
+            alt.isAlternate = true
+            sub.addItem(main)
+            sub.addItem(alt)
+        }
+        sub.addItem(.separator())
+        sub.addItem(.info("点一下复制 HEX；按住 ⌥ 换成 RGB"))
+        sub.addItem(ActionMenuItem("清空") { Settings.recentColors = [] })
+        let item = NSMenuItem(title: "最近的颜色（\(Settings.recentColors.count) 个）", action: nil, keyEquivalent: "")
+        item.submenu = sub
+        return item
+    }
+
+    static func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        Toast.show("✓ 已复制颜色 \(text)")
+    }
+
+    /// 菜单里的小色块（圆角方块，加一圈细边，白色也看得见）
+    static func swatch(_ r: Int, _ g: Int, _ b: Int) -> NSImage {
+        NSImage(size: NSSize(width: 14, height: 14), flipped: false) { rect in
+            let path = NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: 3, yRadius: 3)
+            NSColor(srgbRed: CGFloat(r) / 255, green: CGFloat(g) / 255, blue: CGFloat(b) / 255, alpha: 1).setFill()
+            path.fill()
+            NSColor.black.withAlphaComponent(0.25).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+            return true
+        }
     }
 }

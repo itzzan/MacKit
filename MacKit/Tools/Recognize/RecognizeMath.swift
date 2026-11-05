@@ -115,3 +115,43 @@ enum MeasureText {
     }
 }
 
+
+/// 翻译往哪种语言翻（台阶 15，纯逻辑）
+enum TranslateLanguages {
+    /// 结果窗口小菜单里能选的（BCP-47 代码，中文名）
+    static let targets: [(code: String, name: String)] = [
+        ("zh-Hans", "中文"), ("en", "英文"), ("ja", "日文"), ("ko", "韩文"),
+        ("fr", "法文"), ("de", "德文"), ("es", "西班牙文"), ("ru", "俄文"),
+    ]
+
+    /// 认出来的是哪种语言（系统语言识别给的代码，比如 zh-Hans、en、ja）→ 默认翻成什么：中文翻成英文，别的翻成中文
+    static func defaultTarget(forDetected code: String?) -> String {
+        guard let code, !code.isEmpty else { return "zh-Hans" }
+        return code.hasPrefix("zh") ? "en" : "zh-Hans"
+    }
+
+    static func name(of code: String) -> String {
+        targets.first { $0.code == code }?.name ?? code
+    }
+
+    /// 源语言和目标语言是同一种（不用翻）
+    static func same(_ a: String?, _ b: String) -> Bool {
+        guard let a else { return false }
+        return a.split(separator: "-").first == b.split(separator: "-").first
+    }
+}
+
+/// 最近取过的颜色（台阶 15，纯逻辑）：最新的在前，同一个颜色挪到最前，最多 20 个。存成 0xRRGGBB
+enum ColorHistory {
+    static let limit = 20
+
+    static func pack(_ r: Int, _ g: Int, _ b: Int) -> Int {
+        (min(max(r, 0), 255) << 16) | (min(max(g, 0), 255) << 8) | min(max(b, 0), 255)
+    }
+
+    static func unpack(_ v: Int) -> (Int, Int, Int) { ((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF) }
+
+    static func adding(_ color: Int, to list: [Int]) -> [Int] {
+        Array(([color] + list.filter { $0 != color }).prefix(limit))
+    }
+}
