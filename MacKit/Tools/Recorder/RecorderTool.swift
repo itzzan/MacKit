@@ -501,6 +501,8 @@ final class RecorderTool: ToolModule {
         guard pen == nil else { return }
         let p = ScreenPenSession(region: target.globalFrame, present: present)
         p.onChange = { [weak self] on in self?.hud?.setPenOn(on) }
+        // 放大镜里不拍录制小条、红框这些不录的窗口（不然它们会借放大镜混进视频）；放大镜自己照录（台阶 22 拍板）
+        p.magnifierExclusions = { [weak self] in self?.excludedWindows ?? [] }
         pen = p
         if present, penHotKeyID == nil, let combo = Settings.hotKey(.screenPen) {
             penHotKeyID = HotKeyCenter.shared.register(combo) { [weak self] in self?.togglePen() }

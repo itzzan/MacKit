@@ -15,6 +15,8 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
     private weak var container: NSView?
     /// 打完字后键盘焦点还给谁（选区视图）
     weak var keyView: NSView?
+    /// 打的字用大一档的字号（屏幕画笔，台阶 22）
+    var bigText = false
 
     private var pending: Annotation?
     private(set) var textView: AnnotationTextView?
@@ -523,10 +525,10 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
     /// 字体、颜色，加一层半透明衬底：打在什么颜色的底上都看得清（最终的图上没有衬底）
     private func styleTextView(_ tv: NSTextView) {
         let light = color == .white || color == .yellow
-        tv.font = AnnotationText.font(size)
+        tv.font = AnnotationText.font(size, big: bigText)
         tv.textColor = color.nsColor
         tv.insertionPointColor = color.nsColor
-        tv.typingAttributes = AnnotationText.attributes(color: color, size: size)
+        tv.typingAttributes = AnnotationText.attributes(color: color, size: size, big: bigText)
         tv.drawsBackground = true
         tv.backgroundColor = light ? NSColor.black.withAlphaComponent(0.45) : NSColor.white.withAlphaComponent(0.6)
         tv.layer?.borderColor = (light ? NSColor.white : NSColor.black).withAlphaComponent(0.5).cgColor
@@ -534,8 +536,8 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
 
     private func resizeTextView() {
         guard let tv = textView else { return }
-        let s = AnnotationText.size(of: tv.string, color: color, size: size)
-        let caret = size.fontSize * 0.6                      // 给光标和下一个字留点地方
+        let s = AnnotationText.size(of: tv.string, color: color, size: size, big: bigText)
+        let caret = size.fontSize(big: bigText) * 0.6        // 给光标和下一个字留点地方
         tv.frame = CGRect(x: textTopLeft.x, y: textTopLeft.y - s.height, width: max(s.width + caret, 12), height: s.height)
     }
 
@@ -554,7 +556,8 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
     func commitText() {
         guard let tv = textView else { return }
         if tv.hasMarkedText() { tv.unmarkText() }            // 还在拼写的拼音也算进去
-        let a = Annotation(tool: .text, color: color, size: size, points: [textTopLeft], text: tv.string)
+        var a = Annotation(tool: .text, color: color, size: size, points: [textTopLeft], text: tv.string)
+        a.bigText = bigText
         if let index = editingTextIndex {
             if a.isMeaningful { document.replace(at: index, with: a) } else { document.remove(at: index) }
         } else if a.isMeaningful {

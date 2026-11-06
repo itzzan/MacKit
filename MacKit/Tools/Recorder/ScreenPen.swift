@@ -14,6 +14,11 @@ final class ScreenPenSession {
     let input: PinAnnotateView
     private let present: Bool
     private(set) var isDrawing = false
+    /// 放大镜（台阶 22）：只在开着画笔时有
+    let magnifier: ScreenMagnifier
+    /// 拍放大镜画面时还要去掉的窗口（录屏时录制小条、红框；RecorderTool 接上）
+    var magnifierExclusions: () -> [CGWindowID] = { [] }
+    private var scrollAccumulator: CGFloat = 0
     /// 打开 / 收起（录制小条上的按钮跟着亮）
     var onChange: ((Bool) -> Void)?
 
@@ -45,7 +50,9 @@ final class ScreenPenSession {
                                   customToolbar: AnnotationToolbar(mode: .liveDraw, standalone: true), embedsToolbar: false)
         editor.selection = bounds
         editor.keyView = input
+        editor.bigText = true                        // 屏幕上的字大一档（台阶 22 拍板）
         input.editor = editor
+        magnifier = ScreenMagnifier(screen: NSScreen.screens.first { $0.frame.intersects(region) } ?? NSScreen.main)
 
         toolbarPanel = NSPanel(contentRect: CGRect(origin: .zero, size: editor.toolbar.frame.size),
                                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -64,7 +71,44 @@ final class ScreenPenSession {
         editor.onDone = { [weak self] in self?.end() }
         editor.onCancel = { [weak self] in self?.end() }
         editor.onToolbarChange = { [weak self] in self?.layoutToolbar() }
+        editor.toolbar.onMagnifier = { [weak self] in self?.toggleMagnifier() }
         editor.selectTool(.pen)
+        magnifier.excludedWindows = { [weak self] in
+            guard let self else { return [] }
+            return [self.toolbarWindowNumber] + self.magnifierExclusions()
+        }
+        magnifier.onFail = { text in Toast.show(text, seconds: 3) }
+        // Z 开关放大镜；放大镜开着时 Esc 先收放大镜（第二下才收画笔）
+        input.interceptKey = { [weak self] event in
+            guard let self else { return false }
+            let mods = event.modifierFlags.intersection([.command, .control, .option, .shift])
+            if event.keyCode == 6, mods.isEmpty { self.toggleMagnifier(); return true }
+            if event.keyCode == 53, mods.isEmpty, self.magnifier.isOn { self.toggleMagnifier(); return true }
+            return false
+        }
+        input.onScroll = { [weak self] event in self?.scrolled(event) }
+    }
+
+    var isMagnifying: Bool { magnifier.isOn }
+
+    /// 打开 / 收起放大镜（小工具上的按钮、Z）
+    func toggleMagnifier() {
+        guard isDrawing else { return }
+        if magnifier.isOn { magnifier.hide() } else { magnifier.show(present: present) }
+        editor.toolbar.setMagnifierOn(magnifier.isOn)
+        Log.capture.notice("screen pen magnifier \(self.magnifier.isOn ? "on" : "off", privacy: .public)")
+    }
+
+    /// 滚轮调放大倍数：往上放大、往下缩小；触控板的小步子攒够一格才动
+    func scrolled(_ event: NSEvent) {
+        guard magnifier.isOn else { return }
+        var dy = event.scrollingDeltaY
+        if event.isDirectionInvertedFromDevice { dy = -dy }
+        scrollAccumulator += event.hasPreciseScrollingDeltas ? dy / 12 : dy
+        let steps = Int(scrollAccumulator.rounded(.towardZero))
+        guard steps != 0 else { return }
+        scrollAccumulator -= CGFloat(steps)
+        magnifier.adjustZoom(step: steps)
     }
 
     /// 马赛克、模糊不在屏幕画笔里，打码那份画面用不上，给一张 1×1 的空图
@@ -106,6 +150,8 @@ final class ScreenPenSession {
         guard isDrawing else { return }
         isDrawing = false
         editor.commitText()
+        magnifier.hide()                                               // 放大镜一起收
+        editor.toolbar.setMagnifierOn(false)
         editor.document.restore(AnnotationDocument().checkpoint())     // 画的和撤销记录一起清掉
         editor.reloadFromDocument()
         overlay.orderOut(nil)

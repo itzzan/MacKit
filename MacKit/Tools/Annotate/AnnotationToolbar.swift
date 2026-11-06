@@ -173,12 +173,12 @@ final class AnnotationToolbar: NSView {
     enum Mode {
         case screenshot      // 截图：📌 贴图、💾 另存、✕ 取消、✓ 完成
         case pin             // 贴图上标注：✕ 放弃这次画的、✓ 完成
-        case liveDraw        // 屏幕画笔（台阶 16）：🗑 清空、✓ 收起；没有马赛克、模糊、文字（屏幕是活的）
+        case liveDraw        // 屏幕画笔（台阶 16）：🔍 放大镜（台阶 22）、🗑 清空、✓ 收起；没有马赛克、模糊（屏幕是活的）
     }
 
     /// 这种模式下有哪些工具
     static func tools(for mode: Mode) -> [AnnotationTool] {
-        mode == .liveDraw ? [.pen, .highlighter, .arrow, .rect, .ellipse, .number] : AnnotationTool.allCases
+        mode == .liveDraw ? [.pen, .highlighter, .arrow, .rect, .ellipse, .number, .text] : AnnotationTool.allCases
     }
 
     var onTool: ((AnnotationTool) -> Void)?
@@ -192,6 +192,9 @@ final class AnnotationToolbar: NSView {
     var onLongShot: (() -> Void)?
     var onBeautify: (() -> Void)?
     var onClear: (() -> Void)?
+    /// 屏幕画笔的放大镜（台阶 22）
+    var onMagnifier: (() -> Void)?
+    private(set) var magnifierButton: ToolbarButton?
     /// 放到最上 / 最下（台阶 19）
     var onFront: (() -> Void)?
     var onBack: (() -> Void)?
@@ -252,9 +255,13 @@ final class AnnotationToolbar: NSView {
         }
 
         let clear = ToolbarButton(symbol: "trash", tip: "清空画的") { [weak self] in self?.onClear?() }
+        let magnifier = ToolbarButton(symbol: "magnifyingglass", tip: "放大镜（Z）：鼠标附近放大，滚轮调倍数") { [weak self] in
+            self?.onMagnifier?()
+        }
+        if mode == .liveDraw { magnifierButton = magnifier }
         let actions: [NSView] = switch mode {
         case .pin: [cancel, done]
-        case .liveDraw: [clear, done]
+        case .liveDraw: [magnifier, clear, done]
         case .screenshot: [recognize, longShot, beautify, pin, save, cancel, done]
         }
         hasPinAndSave = mode == .screenshot
@@ -326,5 +333,8 @@ final class AnnotationToolbar: NSView {
     }
 
     var isShowingProperties: Bool { !propertyRow.isHidden }
+
+    /// 放大镜开着时按钮亮着
+    func setMagnifierOn(_ on: Bool) { magnifierButton?.isSelectedLook = on }
     var isShowingArrange: Bool { !propertyRow.isHidden && arrangeButtons.allSatisfy { !$0.isHidden } }
 }

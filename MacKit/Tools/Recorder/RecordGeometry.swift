@@ -160,3 +160,33 @@ enum RecordSchedule {
     static let gifWarnSeconds: Double = 30
 }
 
+
+/// 屏幕画笔的放大镜（台阶 22，纯计算，有单元测试）：放大镜窗口放哪、拍哪一块、滚轮怎么调
+enum MagnifierMath {
+    /// 放大镜直径（点，拍板：大约 260）
+    static let diameter: CGFloat = 260
+    static let zoomRange: ClosedRange<CGFloat> = 1.5...4
+    static let defaultZoom: CGFloat = 2
+
+    /// 放大镜窗口：以鼠标为中心；鼠标到了屏幕边上，整个放大镜还留在屏幕里（Cocoa 坐标，左下原点）
+    static func lensFrame(mouse: CGPoint, screen: CGRect, diameter d: CGFloat = diameter) -> CGRect {
+        let x = min(max(mouse.x - d / 2, screen.minX), screen.maxX - d)
+        let y = min(max(mouse.y - d / 2, screen.minY), screen.maxY - d)
+        return CGRect(x: x, y: y, width: d, height: d)
+    }
+
+    /// 要放大的那一块（这块屏幕画面里的像素，左下原点）：以鼠标为中心、边长 直径÷倍数；不出画面
+    static func sourceRect(mouse: CGPoint, screen: CGRect, pixelsPerPoint s: CGFloat, zoom: CGFloat,
+                           diameter d: CGFloat = diameter) -> CGRect {
+        let side = d / max(zoom, 1) * s
+        let w = screen.width * s, h = screen.height * s
+        let x = min(max((mouse.x - screen.minX) * s - side / 2, 0), max(w - side, 0))
+        let y = min(max((mouse.y - screen.minY) * s - side / 2, 0), max(h - side, 0))
+        return CGRect(x: x, y: y, width: side, height: side)
+    }
+
+    /// 滚轮一格：往上放大、往下缩小，每格 0.25 倍，1.5–4 倍之间
+    static func zoom(_ current: CGFloat, step: Int) -> CGFloat {
+        min(max(current + CGFloat(step) * 0.25, zoomRange.lowerBound), zoomRange.upperBound)
+    }
+}

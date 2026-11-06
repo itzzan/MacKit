@@ -13,7 +13,7 @@
 - **录屏**：区域、窗口、整屏，系统声音和麦克风；暂停继续、定时、预览剪辑、存成 GIF；显示鼠标点击和按键、摄像头画中画；录的时候直接在屏幕上圈圈画画
 - **剪贴板历史**：文字、图片、文件都记下来，打字就能搜（截图里的字也能搜），回车粘贴；常用的收藏起来、起名字；不记某些软件；连续粘贴（复制几段，⌘V 一条条贴出来）；密码不记
 - **识别**：框选识别文字（中英日韩）和二维码，结果能直接翻译（用系统自带的翻译，在电脑上翻）；截图时取色，最近的颜色记在菜单里；测量宽高
-- **小工具**：屏幕画笔（开会共享屏幕时圈重点）、防休眠、看 CPU / 内存 / 网速 / 磁盘 / 电池、系统排窗口快捷键的小抄
+- **小工具**：屏幕画笔（开会共享屏幕时圈重点、在屏幕上打字、放大镜）、防休眠、看 CPU / 内存 / 网速 / 磁盘 / 电池、系统排窗口快捷键的小抄
 - **设置**：一个设置窗口管所有设置；快捷键随便按；开机自动启动；检查更新
 
 <p align="center"><img src="docs/images/界面一览.png" width="560" alt="界面一览"></p>
@@ -105,7 +105,7 @@ scripts/install.sh              # 编译、装到 ~/Applications 并启动
 scripts/install.sh --no-open    # 只装不启动
 scripts/smoke-record.sh         # 录屏实录检查：真的录几小段、拼接、转 GIF 再删掉（会短暂出现系统的录屏标志）
 scripts/smoke-longshot.sh       # 长截图实录检查：真的拍屏幕左上角一小块 1.5 秒，看尺寸、量拼接速度（会短暂出现系统的录屏标志）
-scripts/smoke-pen.sh            # 屏幕画笔实录检查：真的录左上角一小块 2 秒并画一条红线，看视频里有没有（会短暂出现系统的录屏标志）
+scripts/smoke-pen.sh            # 屏幕画笔实录检查：真的录左上角一小块 2 秒，画一条红线、开放大镜，看视频里有没有（会短暂出现系统的录屏标志）
 build/MacKit.app/Contents/MacOS/MacKit --style-preview 输出.png 标题 [左边一栏.png]   # 样张：把各个浮动条、按钮画进一张图（不弹窗口）
 build/MacKit.app/Contents/MacOS/MacKit --welcome-preview 输出.png [dark]   # 把欢迎窗口画成图（不弹窗口、不改设置）
 build/MacKit.app/Contents/MacOS/MacKit --settings-preview 前缀 [dark]       # 把设置窗口五页各画一张图；"输出.png readme" 画 README 那张

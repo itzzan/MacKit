@@ -58,15 +58,17 @@ final class MosaicSource {
 
 /// 文字标注的排版：显示、导出、编辑框都用这一套，位置才对得上
 enum AnnotationText {
-    static func font(_ size: AnnotationSize) -> NSFont { .systemFont(ofSize: size.fontSize, weight: .medium) }
-
-    static func attributes(color: AnnotationColor, size: AnnotationSize) -> [NSAttributedString.Key: Any] {
-        [.font: font(size), .foregroundColor: color.nsColor]
+    static func font(_ size: AnnotationSize, big: Bool = false) -> NSFont {
+        .systemFont(ofSize: size.fontSize(big: big), weight: .medium)
     }
 
-    static func size(of text: String, color: AnnotationColor, size: AnnotationSize) -> CGSize {
+    static func attributes(color: AnnotationColor, size: AnnotationSize, big: Bool = false) -> [NSAttributedString.Key: Any] {
+        [.font: font(size, big: big), .foregroundColor: color.nsColor]
+    }
+
+    static func size(of text: String, color: AnnotationColor, size: AnnotationSize, big: Bool = false) -> CGSize {
         let shown = text.isEmpty ? " " : text
-        let box = NSAttributedString(string: shown, attributes: attributes(color: color, size: size))
+        let box = NSAttributedString(string: shown, attributes: attributes(color: color, size: size, big: big))
             .boundingRect(with: CGSize(width: 4000, height: 4000), options: [.usesLineFragmentOrigin, .usesFontLeading])
         return CGSize(width: ceil(box.width) + 2, height: ceil(box.height))
     }
@@ -74,7 +76,7 @@ enum AnnotationText {
     /// points[0] 是文字框左上角
     static func rect(for a: Annotation) -> CGRect {
         let topLeft = a.points.first ?? .zero
-        let s = size(of: a.text, color: a.color, size: a.size)
+        let s = size(of: a.text, color: a.color, size: a.size, big: a.bigText)
         return CGRect(x: topLeft.x, y: topLeft.y - s.height, width: s.width, height: s.height)
     }
 }
@@ -145,7 +147,7 @@ enum AnnotationRenderer {
             let ns = NSGraphicsContext(cgContext: ctx, flipped: false)
             NSGraphicsContext.saveGraphicsState()
             NSGraphicsContext.current = ns
-            NSAttributedString(string: a.text, attributes: AnnotationText.attributes(color: a.color, size: a.size))
+            NSAttributedString(string: a.text, attributes: AnnotationText.attributes(color: a.color, size: a.size, big: a.bigText))
                 .draw(in: rect)
             NSGraphicsContext.restoreGraphicsState()
 

@@ -119,6 +119,10 @@ final class PinAnnotateView: NSView {
     weak var editor: AnnotationEditor?
     /// 滚轮交给外面能滚的视图（长截图标注，台阶 20）；贴图上标注时不滚、不缩放
     var passesScrollWheel = false
+    /// 屏幕画笔先看一眼的按键（台阶 22：Z 开关放大镜、放大镜开着时 Esc 先收放大镜）；返回 true = 已经处理了
+    var interceptKey: ((NSEvent) -> Bool)?
+    /// 屏幕画笔的滚轮（放大镜调倍数）
+    var onScroll: ((NSEvent) -> Void)?
     private var drawing = false
     private var editing = false                 // 拖选中的标注（台阶 12）
     private var banding = false                 // ⇧ 在空白处拖：框选（台阶 19）
@@ -196,11 +200,14 @@ final class PinAnnotateView: NSView {
 
     // 标注时不拖动、不缩放、不弹右键菜单，免得画歪
     override func rightMouseDown(with event: NSEvent) {}
-    override func scrollWheel(with event: NSEvent) { if passesScrollWheel { super.scrollWheel(with: event) } }
+    override func scrollWheel(with event: NSEvent) {
+        if passesScrollWheel { super.scrollWheel(with: event) } else { onScroll?(event) }
+    }
     override func magnify(with event: NSEvent) {}
 
     override func keyDown(with event: NSEvent) {
         guard let editor else { return super.keyDown(with: event) }
+        if interceptKey?(event) == true { return }
         let code = Int(event.keyCode)
         if code == 53 {                                              // Esc：有选中的先取消选中，没有就放弃这次画的
             if editor.hasSelection { editor.deselect() } else { editor.onCancel?() }

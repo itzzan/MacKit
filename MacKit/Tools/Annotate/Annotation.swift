@@ -90,6 +90,9 @@ enum AnnotationSize: Int, CaseIterable {
     var lineWidth: CGFloat { [2, 4, 6][rawValue] }
     var highlighterWidth: CGFloat { [10, 16, 24][rawValue] }
     var fontSize: CGFloat { [14, 18, 26][rawValue] }
+    /// 屏幕画笔里的字（台阶 22 拍板）：比截图里大一档，开会共享屏幕时对面也看得清
+    var bigFontSize: CGFloat { [24, 36, 54][rawValue] }
+    func fontSize(big: Bool) -> CGFloat { big ? bigFontSize : fontSize }
     var numberDiameter: CGFloat { [20, 26, 34][rawValue] }
     var mosaicBlock: CGFloat { [6, 10, 16][rawValue] }       // 马赛克一格多大（点）
     var blurRadius: CGFloat { [4, 8, 14][rawValue] }         // 模糊：轻 / 中 / 重（点）
@@ -104,6 +107,8 @@ struct Annotation: Equatable {
     var points: [CGPoint]
     var text: String = ""
     var number: Int = 0
+    /// 文字用大一档的字号（屏幕画笔里打的字，台阶 22）
+    var bigText = false
 
     /// 起点终点围成的框（矩形类工具用）
     var box: CGRect {

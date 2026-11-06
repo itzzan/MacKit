@@ -568,5 +568,17 @@ check(abs(zplan.center(at: 1.6).x - 0.9) < 0.05 && zplan.rect(at: 0.5) == CGRect
 let trimmedTrack = MouseTrack(samples: jump, clicks: [1.6, 3.5], duration: 4).trimmed(from: 1, to: 3)
 check(trimmedTrack.clicks.count == 1 && abs(trimmedTrack.clicks[0] - 0.6) < 1e-9 && trimmedTrack.duration == 2 && trimmedTrack.samples.first?.t == 0, "剪掉开头结尾：鼠标记录跟着剪、时间从 0 算")
 
+// MARK: 屏幕画笔的放大镜（台阶 22）
+let lensScreen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+check(MagnifierMath.lensFrame(mouse: CGPoint(x: 700, y: 500), screen: lensScreen) == CGRect(x: 570, y: 370, width: 260, height: 260)
+      && MagnifierMath.lensFrame(mouse: CGPoint(x: 5, y: 975), screen: lensScreen) == CGRect(x: 0, y: 722, width: 260, height: 260),
+      "放大镜以鼠标为中心；鼠标到了屏幕角上，放大镜整个还在屏幕里")
+check(MagnifierMath.sourceRect(mouse: CGPoint(x: 700, y: 500), screen: lensScreen, pixelsPerPoint: 2, zoom: 2)
+      == CGRect(x: 1270, y: 870, width: 260, height: 260), "放大 2 倍：拍鼠标附近 130 点见方（Retina 260 像素）")
+check(MagnifierMath.sourceRect(mouse: CGPoint(x: 1510, y: 2), screen: lensScreen, pixelsPerPoint: 2, zoom: 4)
+      == CGRect(x: 3024 - 130, y: 0, width: 130, height: 130), "放大 4 倍、鼠标在右下角：拍的那块不出画面")
+check(MagnifierMath.zoom(2, step: 1) == 2.25 && MagnifierMath.zoom(3.9, step: 3) == 4 && MagnifierMath.zoom(1.6, step: -1) == 1.5,
+      "滚轮一格调 0.25 倍，1.5 到 4 倍之间")
+
 print(failures == 0 ? "UNIT TESTS OK" : "UNIT TESTS FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)

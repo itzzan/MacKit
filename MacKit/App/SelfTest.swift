@@ -56,6 +56,7 @@ enum SelfTest {
         testRecognize()
         testTranslateAndColors()
         testScreenPen(recorder: recorder)
+        testPenPlus()
         testAutoZoom()
         testLongShot(menu: statusItem.menu)
         testMisc(menu: statusItem.menu, recorder: recorder)
@@ -1438,8 +1439,9 @@ enum SelfTest {
     private static func testScreenPen(recorder: RecorderTool) {
         let tools = AnnotationToolbar.tools(for: .liveDraw)
         let bar = AnnotationToolbar(mode: .liveDraw, standalone: true)
-        check(tools == [.pen, .highlighter, .arrow, .rect, .ellipse, .number] && Set(bar.toolButtons.keys) == Set(tools)
-              && findButton(in: bar) { $0.toolTip == "清空画的" } != nil, "画笔的小工具：没有马赛克、模糊、文字，有\u{201C}清空\u{201D}")
+        check(tools == [.pen, .highlighter, .arrow, .rect, .ellipse, .number, .text] && Set(bar.toolButtons.keys) == Set(tools)
+              && findButton(in: bar) { $0.toolTip == "清空画的" } != nil,
+              "画笔的小工具：没有马赛克、模糊，有\u{201C}清空\u{201D}；台阶 22 起多了文字")
 
         let pen = ScreenPenSession(region: CGRect(x: 100, y: 100, width: 400, height: 300), present: false)
         var changes: [Bool] = []
@@ -1486,6 +1488,9 @@ enum SelfTest {
                 check(recorder.excludedWindows.contains(p.toolbarWindowNumber)
                       && !recorder.excludedWindows.contains(CGWindowID(p.overlay.windowNumber)) && p.region == target.globalFrame,
                       "录屏时：画笔盖在录制区域上，小工具不录进去，画的录进去")
+                check(!recorder.excludedWindows.contains(CGWindowID(p.magnifier.panel.windowNumber))
+                      && p.magnifierExclusions() == recorder.excludedWindows,
+                      "录屏时放大镜录进视频（不在\u{201C}不录\u{201D}名单里）；放大镜里不拍录制小条这些不录的窗口")
             } else { check(false, "录屏时造好画笔") }
             recorder.reset()
             check(recorder.pen == nil, "录完：画笔收掉")
@@ -1862,6 +1867,82 @@ enum SelfTest {
         check(preview.buttons.keys.sorted() == ["delete", "gif", "reveal", "save", "trim"] && preview.trimRange != nil,
               "预览窗口：剪辑、保存、存成 GIF、在访达中显示、删掉")
         preview.window.close()
+    }
+
+    // MARK: 台阶 22 屏幕画笔：打字、放大镜（不显示、不拍画面）
+
+    private static func testPenPlus() {
+        let pen = ScreenPenSession(region: CGRect(x: 100, y: 100, width: 400, height: 300), present: false)
+        defer { pen.close() }
+        pen.begin(takeKeyboard: false)
+        let bar = pen.editor.toolbar
+        check(bar.toolButtons[.text] != nil && bar.magnifierButton != nil && bar.toolButtons[.mosaic] == nil,
+              "屏幕画笔的小工具多了\u{201C}文字\u{201D}和\u{201C}放大镜\u{201D}（还是没有马赛克）")
+        check(AnnotationSize.thin.fontSize(big: true) == 24 && AnnotationSize.medium.fontSize(big: true) == 36
+              && AnnotationSize.thick.fontSize(big: true) == 54 && AnnotationSize.medium.fontSize(big: false) == 18 && pen.editor.bigText,
+              "屏幕上的字比截图大一档：24 / 36 / 54 点（截图里还是 14 / 18 / 26）")
+
+        // 打字
+        pen.editor.setColor(.red)
+        pen.editor.setSize(.medium)
+        pen.input.keyDown(with: key("t", code: 17))
+        check(pen.editor.tool == .text, "按 T：换成文字")
+        pen.input.mouseDown(with: mouse(.leftMouseDown, 60, 200))
+        pen.input.mouseUp(with: mouse(.leftMouseUp, 60, 200))
+        if let tv = pen.editor.textView {
+            check(tv.font?.pointSize == 36, "在屏幕上点一下：出现输入框，字是 36 点（中）")
+            let before = tv.frame.width
+            tv.setMarkedText("di yi bu", selectedRange: NSRange(location: 8, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+            check(tv.frame.width > before, "用拼音打字时，拼写中的拼音也撑开输入框（台阶 3 的坑）")
+            tv.unmarkText()
+            tv.setSelectedRange(NSRange(location: 0, length: (tv.string as NSString).length))
+            tv.insertText("第一步 Step 1", replacementRange: NSRange(location: 0, length: (tv.string as NSString).length))
+            pen.editor.commitText()
+        } else { check(false, "文字工具点一下出现输入框") }
+        let texts = pen.editor.document.items.filter { $0.tool == .text }
+        check(texts.count == 1 && texts[0].text == "第一步 Step 1" && texts[0].bigText && texts[0].color == .red
+              && AnnotationText.rect(for: texts[0]).height > 36, "打完：字留在屏幕上，红色、大一档")
+        if let t = texts.first {
+            let inside = CGPoint(x: AnnotationText.rect(for: t).midX, y: AnnotationText.rect(for: t).midY)
+            check(pen.editor.editText(at: inside) && pen.editor.textView?.string == "第一步 Step 1", "双击打好的字：接着改")
+            pen.editor.commitText()
+        }
+        _ = pen.input.performKeyEquivalent(with: key("z", code: 6, mods: .command))
+        check(pen.editor.document.items.filter { $0.tool == .text }.isEmpty, "⌘Z：打的字撤回")
+
+        // 放大镜
+        let m = pen.magnifier
+        m.mouseLocation = { CGPoint(x: 300, y: 250) }
+        pen.input.keyDown(with: key("z", code: 6))
+        check(pen.isMagnifying && bar.magnifierButton?.isSelectedLook == true && !m.isCapturing,
+              "按 Z：放大镜打开，小工具上的按钮亮着（自检不拍画面）")
+        check(m.panel.ignoresMouseEvents && m.panel.level.rawValue > pen.overlay.level.rawValue
+              && m.panel.level.rawValue < pen.toolbarPanel.level.rawValue && m.panel.frame == CGRect(x: 170, y: 120, width: 260, height: 260),
+              "放大镜：直径 260 点、以鼠标为中心，在画布上面、小工具下面，不挡鼠标")
+        m.mouseLocation = { CGPoint(x: m.screenFrame.maxX - 3, y: m.screenFrame.minY + 3) }
+        m.follow()
+        check(m.panel.frame.maxX <= m.screenFrame.maxX && m.panel.frame.minY >= m.screenFrame.minY, "鼠标到了屏幕角上：放大镜不出屏幕")
+        if let up = scrollEvent(lines: 1, option: false), let down = scrollEvent(lines: -1, option: false) {
+            pen.input.scrollWheel(with: up)
+            let changed = m.zoom
+            pen.input.scrollWheel(with: down)
+            check(changed != 2 && (1.5...4).contains(changed) && m.zoom == 2, "滚轮一格：倍数变 0.25（\(changed) 倍），反过来滚又回到 2 倍")
+        }
+        for _ in 0..<20 { m.adjustZoom(step: 1) }
+        check(m.zoom == 4, "最大放大 4 倍")
+        let pen1 = pen.editor.document.items.count
+        pen.editor.selectTool(.pen)
+        pen.input.mouseDown(with: mouse(.leftMouseDown, 50, 80))
+        pen.input.mouseDragged(with: mouse(.leftMouseDragged, 120, 90))
+        pen.input.mouseUp(with: mouse(.leftMouseUp, 200, 100))
+        check(pen.editor.document.items.count == pen1 + 1 && pen.isMagnifying, "开着放大镜照样能画")
+        pen.input.keyDown(with: key("\u{1b}", code: 53))
+        check(!pen.isMagnifying && pen.isDrawing, "放大镜开着时 Esc：先收放大镜，画笔还开着")
+        pen.toggleMagnifier()
+        pen.end()
+        check(!pen.isMagnifying && !m.panel.isVisible && pen.editor.document.items.isEmpty, "收起画笔：画的、打的字、放大镜一起没了")
+        pen.toggleMagnifier()
+        check(!pen.isMagnifying, "画笔收着时按放大镜：不开")
     }
 
     // MARK: 台阶 21 录屏自动推近（不真的录屏、不显示窗口、不弹提示；鼠标记录存在临时文件夹）
@@ -3162,13 +3243,18 @@ enum PenSmokeTest {
             var lines: [String] = []
             var ok = false
             guard let screen = NSScreen.screens.first, let id = screen.displayID else { finish(["没有屏幕"], false, resultPath); return }
-            let viewRect = CGRect(x: 40, y: screen.frame.height - 60 - 160, width: 240, height: 160)
+            // 台阶 22：框大一点，放得下整个放大镜（直径 260 点）
+            let viewRect = CGRect(x: 40, y: screen.frame.height - 60 - 320, width: 420, height: 320)
             let target = RecordTarget.region(id: id, screenFrame: screen.frame, viewRect: viewRect)
             let pen = ScreenPenSession(region: target.globalFrame)
             pen.begin(takeKeyboard: false)
             pen.editor.document.add(Annotation(tool: .pen, color: .red, size: .thick,
-                                               points: [CGPoint(x: 20, y: 80), CGPoint(x: 120, y: 80), CGPoint(x: 220, y: 80)]))
+                                               points: [CGPoint(x: 20, y: 40), CGPoint(x: 120, y: 40), CGPoint(x: 220, y: 40)]))
             pen.editor.reloadFromDocument()
+            let lensCenter = CGPoint(x: target.globalFrame.midX + 40, y: target.globalFrame.midY + 20)
+            pen.magnifier.mouseLocation = { lensCenter }          // 放大镜摆在框中间偏右上，不跟真鼠标
+            pen.toggleMagnifier()
+            try? await Task.sleep(for: .seconds(0.6))             // 等放大镜开始拍画面
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mackit-pen-smoke-\(UUID().uuidString)")
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: dir) }
@@ -3182,17 +3268,19 @@ enum PenSmokeTest {
                 let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
                 generator.appliesPreferredTrackTransform = true
                 let frame = try await generator.image(at: CMTime(seconds: 1, preferredTimescale: 600)).image
-                var red = 0
+                var red = 0, ring = 0
                 if let px = PixelBuffer(image: frame) {
                     for y in stride(from: 0, to: frame.height, by: 2) {
                         for x in stride(from: 0, to: frame.width, by: 2) {
                             let c = px.rgb(x, y)
                             if c.0 > 200 && c.1 < 90 && c.2 < 90 { red += 1 }
+                            if c.2 > 215 && c.0 < 90 && c.1 > 105 && c.1 < 185 { ring += 1 }      // 放大镜那一圈主题蓝
                         }
                     }
                 }
                 lines.append("实录：视频 \(frame.width)×\(frame.height)，画的红线在画面里找到 \(red) 个红点（抽样）")
-                ok = red > 60
+                lines.append("放大镜：\(pen.magnifier.isCapturing ? "在拍画面" : "没拍到画面")，视频里找到 \(ring) 个放大镜边框的蓝点（抽样）")
+                ok = red > 60 && ring > 40 && pen.magnifier.isCapturing
             } catch {
                 lines.append("实录失败：\(error.localizedDescription)")
             }
