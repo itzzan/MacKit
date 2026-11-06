@@ -55,6 +55,7 @@ enum SelfTest {
         testRecordingExtras(recorder)
         testRecordingOverlays(recorder)
         testRecognize()
+        testMeasureAndPalette(menu: statusItem.menu)
         testTranslateAndColors()
         testScreenPen(recorder: recorder)
         testPenPlus()
@@ -2440,6 +2441,138 @@ enum SelfTest {
         let pinMenu = PinWindow(image: image, pointSize: NSSize(width: 100, height: 100),
                                 frame: CGRect(x: 0, y: 0, width: 100, height: 100), scale: 1).makeContextMenu().items.map(\.title)
         check(pinMenu.contains("识别文字"), "贴图右键菜单里有「识别文字」")
+    }
+
+    // MARK: 台阶 24 测量和颜色：量两个东西的间距、对齐线、调色板（设置测完换回去，私有剪贴板，不出声不弹提示）
+
+    private static func testMeasureAndPalette(menu: NSMenu?) {
+        // 白底上一张浅灰卡片（像素 40…559 × 40…359），卡片里两个黑按钮：A 80…199 × 100…159，B 248…367 × 100…163
+        let ctx = CGContext(data: nil, width: 600, height: 400, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: sRGB, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: 600, height: 400))
+        ctx.setFillColor(CGColor(srgbRed: 0.85, green: 0.85, blue: 0.85, alpha: 1))
+        ctx.fill(CGRect(x: 40, y: 400 - 360, width: 520, height: 320))
+        ctx.setFillColor(CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 1))
+        ctx.fill(CGRect(x: 80, y: 400 - 160, width: 120, height: 60))
+        ctx.fill(CGRect(x: 248, y: 400 - 164, width: 120, height: 64))
+        guard let gapImage = ctx.makeImage() else { check(false, "测量：造一张假画面"); return }
+        let gv = MeasureView(frame: CGRect(x: 0, y: 0, width: 300, height: 200), image: gapImage, backingScale: 2)
+        var gapCopied: String?
+        var cancelled = false
+        gv.onCopy = { gapCopied = $0 }
+        gv.onCancel = { cancelled = true }
+        let space = key(" ", code: 49), esc = key("\u{1b}", code: 53)
+        gv.measureEdges(at: CGPoint(x: 70, y: 135))                  // 按钮 A 里
+        check(gv.copyText == "60 × 30" && gv.infoText.contains("空格 记下它"), "测量：照旧量出按钮大小，提示里有\u{201C}空格 记下它\u{201D}")
+        gv.keyDown(with: space)
+        check(gv.firstBox == PixelBox(minX: 80, minY: 100, maxX: 200, maxY: 160) && gv.relation == .same
+              && gv.infoText.hasPrefix("这就是记下的那个"), "按空格：记下鼠标下面的按钮")
+        gv.measureEdges(at: CGPoint(x: 154, y: 134))                 // 按钮 B 里
+        check(gv.secondBox == PixelBox(minX: 248, minY: 100, maxX: 368, maxY: 164) && gv.relation == .apart(horizontal: 48, vertical: nil)
+              && gv.copyText == "24" && gv.infoText.hasPrefix("间距 24 点"), "指到旁边的按钮：标出两个之间的间距 24 点")
+        check(gv.alignments.contains { $0.edge == .top && $0.diff == 0 } && gv.alignments.contains { $0.edge == .bottom && $0.diff == 4 }
+              && gv.infoText.contains("对齐：顶边") && gv.infoText.contains("底边差 2 点"), "顶边对齐（实线）；底边差 2 点（虚线）")
+        gv.keyDown(with: key("c", code: 8))
+        check(gapCopied == "24", "按 C：复制间距\u{201C}24\u{201D}")
+        gv.keyDown(with: esc)
+        check(gv.firstBox == nil && !cancelled && gv.copyText == "60 × 32", "Esc：先取消记下的，回到十字线（量鼠标下面的按钮），还在测量")
+        gv.measureEdges(at: CGPoint(x: 250, y: 50))                  // 卡片的空白处
+        gv.keyDown(with: space)
+        check(gv.firstBox == PixelBox(minX: 40, minY: 40, maxX: 560, maxY: 360), "记下整张卡片")
+        gv.measureEdges(at: CGPoint(x: 70, y: 135))
+        check(gv.relation == .inside(top: 60, bottom: 200, left: 40, right: 360) && gv.copyText == "上 30 下 100 左 20 右 180"
+              && gv.infoText.hasPrefix("边距"), "指到卡片里的按钮：标出上下左右四个边距")
+        gv.keyDown(with: space)
+        check(gv.firstBox == PixelBox(minX: 80, minY: 100, maxX: 200, maxY: 160), "再按空格：换成鼠标下面这个当第一个")
+        gv.measureBox(from: CGPoint(x: 10, y: 10), to: CGPoint(x: 60, y: 40))
+        check(gv.copyText == "50 × 30", "记下了以后照样能拖框量大小")
+        gv.keyDown(with: esc)
+        gv.keyDown(with: esc)
+        check(cancelled, "再按一次 Esc：退出测量")
+
+        // 调色板：⌘1 按 S 存进来
+        let savedDefaults = snapshotDefaults()
+        let ppb = NSPasteboard(name: NSPasteboard.Name("local.mackit.selftest.palette.\(UUID().uuidString)"))
+        defer {
+            restoreDefaults(savedDefaults)
+            ppb.releaseGlobally()
+        }
+        for k in ["color.palettes", "color.palette.current", "color.recent"] { UserDefaults.standard.removeObject(forKey: k) }
+        check(Palettes.all.isEmpty && Palettes.current == nil, "调色板：一开始一个都没有")
+        let shot = SelectionView(frame: CGRect(x: 0, y: 0, width: 1512, height: 982), image: makeTestImage(width: 3024, height: 1964),
+                                 windowRects: [], scale: 2)
+        var pickedText: String?
+        shot.onColorPick = { pickedText = $0 }
+        shot.onColorSave = { [weak shot] in
+            guard let shot, let c = shot.pointedColor else { return }
+            shot.showMagnifierNote(SelectionSession.saveColor(c))
+        }
+        shot.updateMagnifier(at: CGPoint(x: 150, y: 832))           // 蓝块
+        check(shot.magnifierText.hasSuffix("C 复制　S 存进调色板"), "⌘1 放大镜下面写着\u{201C}S 存进调色板\u{201D}")
+        guard let blue = shot.pointedColor else { check(false, "⌘1 取到颜色"); return }
+        let blueValue = ColorHistory.pack(blue.0, blue.1, blue.2)
+        shot.keyDown(with: key("s", code: 1))
+        check(pickedText == nil && Palettes.all.map(\.name) == ["我的颜色"] && Palettes.current?.colors.map(\.value) == [blueValue]
+              && shot.magnifierText.hasPrefix("✓ 已存进「我的颜色」（1 个）") && Settings.recentColors.first == blueValue,
+              "按 S：没有调色板就建\u{201C}我的颜色\u{201D}存进去，不复制、不退出；放大镜下面写已存进；也记进最近的颜色")
+        shot.updateMagnifier(at: CGPoint(x: 150, y: 960))           // 上面的红条
+        shot.keyDown(with: key("s", code: 1))
+        guard let red = shot.pointedColor else { check(false, "⌘1 取到红色"); return }
+        let redValue = ColorHistory.pack(red.0, red.1, red.2)
+        shot.updateMagnifier(at: CGPoint(x: 150, y: 832))
+        shot.keyDown(with: key("s", code: 1))
+        check(Palettes.current?.colors.map(\.value) == [blueValue, redValue] && shot.magnifierText.contains("已经有这个颜色了"),
+              "接着取第二个按 S；同一个颜色再按不存两遍")
+
+        // 调色板窗口（不显示）
+        let pw = PaletteWindow()
+        pw.pasteboard = ppb
+        pw.showsToast = false
+        check(pw.picker.titleOfSelectedItem == "我的颜色（2）" && pw.table.numberOfRows == 2 && pw.recentButtons.count == 2,
+              "调色板窗口：我的颜色里两个颜色，下面两个最近取过的")
+        pw.renameCurrent(to: "品牌色")
+        pw.setName(row: 0, "主色")
+        check(Palettes.current?.name == "品牌色" && pw.picker.titleOfSelectedItem == "品牌色（2）" && Palettes.current?.colors.first?.name == "主色",
+              "改名成\u{201C}品牌色\u{201D}，第一个颜色起名\u{201C}主色\u{201D}")
+        pw.hexField.stringValue = "#34c759"
+        let typedOK = pw.addTypedHex()
+        pw.hexField.stringValue = "不是颜色"
+        check(typedOK && !pw.addTypedHex() && Palettes.current?.colors.map(\.value) == [blueValue, redValue, 0x34C759],
+              "打 #34c759 加进来；打得不对不加")
+        Settings.recentColors = [0x123456] + Settings.recentColors
+        pw.reload()
+        pw.recentButtons.first?.performClick(nil)
+        check(pw.recentButtons.count == 3 && Palettes.current?.colors.last?.value == 0x123456, "点下面最近取过的颜色：加进来")
+        pw.table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+        pw.removeSelected()
+        check(Palettes.current?.colors.map(\.value) == [blueValue, 0x34C759, 0x123456], "删掉选中的颜色")
+        pw.copyRow(0)
+        let hexCopied = ppb.string(forType: .string)
+        pw.copyRow(0, rgb: true)
+        check(hexCopied == ColorText.hex(blue.0, blue.1, blue.2) && ppb.string(forType: .string) == ColorText.rgb(blue.0, blue.1, blue.2),
+              "一行后面的\u{201C}复制\u{201D}：复制 HEX，按住 ⌥ 复制 RGB")
+        let exportMenu = pw.exportMenu()
+        check(exportMenu.items.map(\.title) == ["复制成纯文字", "复制成 CSS 变量", "复制成 JSON"], "导出：三种格式")
+        exportMenu.performActionForItem(at: 1)
+        let css = ppb.string(forType: .string) ?? ""
+        check(css.hasPrefix("/* 品牌色 */\n:root {") && css.contains("--主色: \(ColorText.hex(blue.0, blue.1, blue.2));")
+              && css.contains("--color-2: #34C759;"), "复制成 CSS 变量：--主色、--color-2")
+        exportMenu.performActionForItem(at: 0)
+        check(ppb.string(forType: .string)?.hasPrefix("品牌色\n主色 #") == true, "复制成纯文字")
+        let web = pw.createPalette(named: "网页配色")
+        check(Palettes.all.map(\.name) == ["品牌色", "网页配色"] && Palettes.current?.id == web.id && pw.table.numberOfRows == 0,
+              "新建\u{201C}网页配色\u{201D}：成了现在这个，空的")
+        _ = SelectionSession.saveColor((1, 2, 3))
+        check(Palettes.current?.colors.map(\.value) == [0x010203] && Palettes.all.first?.colors.count == 3, "⌘1 按 S 存进最近打开的那个")
+        pw.picker.selectItem(at: 0)
+        pw.pickerChanged()
+        check(Palettes.current?.name == "品牌色" && pw.table.numberOfRows == 3, "上面挑回\u{201C}品牌色\u{201D}")
+        pw.deleteCurrent()
+        check(Palettes.all.map(\.name) == ["网页配色"] && Palettes.current?.name == "网页配色", "删掉品牌色：剩网页配色")
+        check(UserDefaults.standard.data(forKey: "color.palettes") != nil && Settings.palettes == Palettes.all,
+              "调色板存在设置里（重启后还在）")
+        check((menu.map(allTitles) ?? []).contains { $0.hasPrefix("调色板…") }, "菜单\u{201C}截图\u{201D}那一组里有\u{201C}调色板…\u{201D}")
     }
 
     // MARK: 长截图

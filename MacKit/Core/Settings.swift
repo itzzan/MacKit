@@ -372,6 +372,18 @@ enum Settings {
         set { store.set(newValue, forKey: "clipboard.queueTab") }
     }
 
+    /// 调色板（台阶 24）：存成 JSON（名字、颜色数字、颜色的名字）
+    static var palettes: [ColorPalette] {
+        get { store.data(forKey: "color.palettes").flatMap { try? JSONDecoder().decode([ColorPalette].self, from: $0) } ?? [] }
+        set { store.set(try? JSONEncoder().encode(newValue), forKey: "color.palettes") }
+    }
+
+    /// 最近打开的是哪个调色板（⌘1 按 S 存进它）
+    static var currentPaletteID: UUID? {
+        get { store.string(forKey: "color.palette.current").flatMap(UUID.init(uuidString:)) }
+        set { store.set(newValue?.uuidString, forKey: "color.palette.current") }
+    }
+
     /// 最近取过的颜色（台阶 15），0xRRGGBB，最新的在前，最多 20 个
     static var recentColors: [Int] {
         get { store.array(forKey: "color.recent") as? [Int] ?? [] }

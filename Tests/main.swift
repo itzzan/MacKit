@@ -597,5 +597,50 @@ check(ClipboardText.capitalizeWords("hello world, don't stop. iPhone 3rd 中文a
       "每个词首字母大写：别的字母不动，don't 不拆开")
 check(ClipboardText.Format.allCases.count == 5 && ClipboardText.reformat("", .joinLines) == "", "五种格式；空的还是空的")
 
+// MARK: 量两个东西的间距、对齐（台阶 24）
+let boxA = PixelBox(minX: 100, minY: 100, maxX: 200, maxY: 140)
+check(MeasureGap.relation(boxA, PixelBox(minX: 224, minY: 100, maxX: 300, maxY: 140)) == .apart(horizontal: 24, vertical: nil)
+      && MeasureGap.relation(PixelBox(minX: 0, minY: 100, maxX: 80, maxY: 140), boxA) == .apart(horizontal: 20, vertical: nil),
+      "左右排着：横着的间距（谁在左边都一样）")
+check(MeasureGap.relation(boxA, PixelBox(minX: 100, minY: 156, maxX: 200, maxY: 196)) == .apart(horizontal: nil, vertical: 16),
+      "上下排着：竖着的间距")
+check(MeasureGap.relation(boxA, PixelBox(minX: 230, minY: 150, maxX: 260, maxY: 170)) == .apart(horizontal: 30, vertical: 10),
+      "斜着摆：横竖都有")
+let card = PixelBox(minX: 50, minY: 50, maxX: 350, maxY: 250)
+check(MeasureGap.relation(card, boxA) == .inside(top: 50, bottom: 110, left: 50, right: 150)
+      && MeasureGap.relation(boxA, card) == .inside(top: 50, bottom: 110, left: 50, right: 150), "一个在另一个里面：四个边距（先记哪个都一样）")
+check(MeasureGap.relation(boxA, PixelBox(minX: 150, minY: 120, maxX: 250, maxY: 160)) == .overlapping
+      && MeasureGap.relation(boxA, boxA) == .same, "交叉叠着的、同一个：没有间距")
+let aligned = MeasureGap.alignments(boxA, PixelBox(minX: 240, minY: 100, maxX: 300, maxY: 144), near: 8)
+check(aligned.contains { $0.edge == .top && $0.diff == 0 } && aligned.contains { $0.edge == .bottom && $0.diff == 4 }
+      && aligned.contains { $0.edge == .centerY && $0.diff == 2 } && !aligned.contains { $0.edge == .left },
+      "对齐：顶边对齐、底边差 4 像素、中线差 2 像素；离得远的线不算")
+check(MeasureGap.alignments(boxA, PixelBox(minX: 120, minY: 300, maxX: 181, maxY: 320), near: 0).map(\.edge) == [.centerX],
+      "中线差半个像素也算对齐")
+check(MeasureGap.text(.apart(horizontal: 24, vertical: nil), scale: 2) == "12" && MeasureGap.text(.apart(horizontal: 24, vertical: 16), scale: 2) == "横 12、竖 8"
+      && MeasureGap.text(.inside(top: 24, bottom: 24, left: 32, right: 31), scale: 2) == "上 12 下 12 左 16 右 15.5"
+      && MeasureGap.text(.same, scale: 2) == nil, "复制的文字按点算：12、横 12、竖 8、四个边距")
+
+// MARK: 调色板（台阶 24）
+var brand = ColorPalette(name: "品牌色")
+check(brand.add(0xFF3B30, name: "主色") && brand.add(0x0A84FF) && !brand.add(0xFF3B30) && brand.colors.count == 2, "调色板：同一个颜色不存两遍")
+brand.add(0x34C759, name: "成功 绿")
+check(PaletteText.plain(brand) == "品牌色\n主色 #FF3B30\n#0A84FF\n成功 绿 #34C759", "导出纯文字：一行一个，没名字只写 HEX")
+check(PaletteText.css(brand) == "/* 品牌色 */\n:root {\n  --主色: #FF3B30;\n  --color-2: #0A84FF;\n  --成功-绿: #34C759;\n}",
+      "导出 CSS 变量：名字里的空格换成 -，没名字叫 color-2")
+var twins = ColorPalette(name: "重名")
+twins.add(0x111111, name: "灰"); twins.add(0x222222, name: "灰")
+check(PaletteText.css(twins).contains("--灰: #111111;") && PaletteText.css(twins).contains("--灰-2: #222222;"), "CSS 变量重名：后面加 -2")
+let jsonText = PaletteText.json(brand)
+let parsed = (try? JSONSerialization.jsonObject(with: Data(jsonText.utf8))) as? [String: Any]
+let parsedColors = parsed?["colors"] as? [[String: Any]]
+check(parsed?["name"] as? String == "品牌色" && parsedColors?.count == 3 && parsedColors?[0]["hex"] as? String == "#FF3B30"
+      && parsedColors?[0]["rgb"] as? [Int] == [255, 59, 48] && parsedColors?[1]["name"] == nil && parsedColors?[0]["name"] as? String == "主色",
+      "导出 JSON：能读回来，名字、HEX、RGB 都对，没名字的不写名字")
+check(PaletteText.parseHex("#FF3B30") == 0xFF3B30 && PaletteText.parseHex(" ff3b30 ") == 0xFF3B30 && PaletteText.parseHex("#f00") == 0xFF0000
+      && PaletteText.parseHex("#GG0000") == nil && PaletteText.parseHex("12345") == nil, "打 HEX：带不带 #、大小写、三位的都认；不对的不认")
+check(PaletteText.uniqueName("品牌色", existing: ["品牌色", "品牌色 2"]) == "品牌色 3" && PaletteText.uniqueName("  ", existing: []) == "我的颜色",
+      "新建调色板的名字：重复了加数字，空的叫我的颜色")
+
 print(failures == 0 ? "UNIT TESTS OK" : "UNIT TESTS FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)

@@ -51,6 +51,13 @@ final class SelectionView: NSView {
     private var lastMouse: CGPoint?
     /// 鼠标指着的颜色（sRGB 0–255）；自检用
     private(set) var pointedColor: (Int, Int, Int)?
+    /// 按 S 存进调色板（台阶 24）：存完不退出截图，能接着取下一个
+    var onColorSave: (() -> Void)?
+    /// 放大镜下面那行字临时换成这个（"✓ 已存进「品牌色」"），过一会儿换回去
+    private(set) var magnifierNote: String?
+    private var noteGeneration = 0
+    /// 放大镜下面那行字（自检看）
+    private(set) var magnifierText = ""
 
     private var selection: CGRect?
     private var tracking: NSTrackingArea?
@@ -197,7 +204,8 @@ final class SelectionView: NSView {
         pointedColor = color
         let useHex = Settings.colorAsHex != shiftHeld                 // 按住 ⇧ 临时换另一种
         let colorText = ColorText.text(color.0, color.1, color.2, hex: useHex)
-        let labelSize = magnifierLabel.set("\(Int(p.x)), \(Int(bounds.height - p.y))　\(colorText)　C 复制", scale: scale)
+        magnifierText = magnifierNote ?? "\(Int(p.x)), \(Int(bounds.height - p.y))　\(colorText)　C 复制　S 存进调色板"
+        let labelSize = magnifierLabel.set(magnifierText, scale: scale)
         let side = magnifier.bounds.width
         let total = CGSize(width: max(side, labelSize.width), height: side + 4 + labelSize.height)
         let origin = MagnifierGeometry.origin(size: total, cursor: p, bounds: bounds)
@@ -205,6 +213,20 @@ final class SelectionView: NSView {
         magnifierLabel.frame = CGRect(origin: origin, size: labelSize)
         magnifier.isHidden = false
         magnifierLabel.isHidden = false
+    }
+
+    /// 放大镜下面临时写一句话（1.5 秒后换回坐标和颜色）
+    func showMagnifierNote(_ text: String) {
+        magnifierNote = text
+        noteGeneration += 1
+        let mine = noteGeneration
+        updateMagnifier(at: lastMouse)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard let self, self.noteGeneration == mine else { return }
+            self.magnifierNote = nil
+            self.updateMagnifier(at: self.lastMouse)
+        }
     }
 
     /// 现在指着的颜色写成文字（按住 ⇧ 时换成另一种格式）
@@ -486,6 +508,8 @@ final class SelectionView: NSView {
                 onSelect?(sel)
             } else if code == 8, let text = pointedColorText {                   // C：复制颜色
                 onColorPick?(text)
+            } else if code == 1, pointedColor != nil {                           // S：存进调色板，不退出（台阶 24）
+                onColorSave?()
             } else if let d = arrows[code] {
                 nudgeMouse(d)
             } else {

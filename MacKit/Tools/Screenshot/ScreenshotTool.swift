@@ -182,6 +182,12 @@ final class ScreenshotTool: ToolModule {
         delayItem.submenu = delayMenu
         items.append(delayItem)
         if !Settings.recentColors.isEmpty { items.append(RecentColors.menuItem()) }
+        items.append(ActionMenuItem("调色板…（⌘1 取色时按 S 存进来）") {           // 台阶 24
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(0.15))           // 等菜单收起
+                PaletteWindow.showShared()
+            }
+        })
         return items
     }
 

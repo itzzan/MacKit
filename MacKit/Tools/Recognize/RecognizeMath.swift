@@ -155,3 +155,79 @@ enum ColorHistory {
         Array(([color] + list.filter { $0 != color }).prefix(limit))
     }
 }
+
+// MARK: 量两个东西的间距、对齐（台阶 24，纯计算）
+
+/// 屏幕上一个东西的框：屏幕像素，左上原点，max 那一格不算在里面
+struct PixelBox: Equatable {
+    var minX: Int, minY: Int, maxX: Int, maxY: Int
+    var width: Int { maxX - minX }
+    var height: Int { maxY - minY }
+    func contains(_ b: PixelBox) -> Bool { minX <= b.minX && minY <= b.minY && maxX >= b.maxX && maxY >= b.maxY }
+}
+
+enum MeasureGap {
+    enum Relation: Equatable {
+        /// 就是同一个
+        case same
+        /// 分开的：横着隔多少、竖着隔多少（那个方向上叠着就是 nil）
+        case apart(horizontal: Int?, vertical: Int?)
+        /// 一个在另一个里面：里面那个到外面那个四条边各多远
+        case inside(top: Int, bottom: Int, left: Int, right: Int)
+        /// 交叉叠在一起
+        case overlapping
+    }
+
+    static func relation(_ a: PixelBox, _ b: PixelBox) -> Relation {
+        if a == b { return .same }
+        if a.contains(b) || b.contains(a) {
+            let (outer, inner) = a.contains(b) ? (a, b) : (b, a)
+            return .inside(top: inner.minY - outer.minY, bottom: outer.maxY - inner.maxY,
+                           left: inner.minX - outer.minX, right: outer.maxX - inner.maxX)
+        }
+        let h: Int? = b.minX >= a.maxX ? b.minX - a.maxX : a.minX >= b.maxX ? a.minX - b.maxX : nil
+        let v: Int? = b.minY >= a.maxY ? b.minY - a.maxY : a.minY >= b.maxY ? a.minY - b.maxY : nil
+        return h == nil && v == nil ? .overlapping : .apart(horizontal: h, vertical: v)
+    }
+
+    /// 比哪六条线：左边、竖着的中线、右边（竖线）；顶边、横着的中线、底边（横线）
+    enum Edge: Int, CaseIterable {
+        case left, centerX, right, top, centerY, bottom
+        var isVertical: Bool { rawValue < 3 }
+        var name: String { ["左边", "竖中线", "右边", "顶边", "横中线", "底边"][rawValue] }
+    }
+
+    struct Alignment: Equatable {
+        let edge: Edge
+        /// 差几个像素：0 = 对齐
+        let diff: Int
+        /// a 的那条线在哪（像素；竖线是 x，横线是 y）
+        let positionA: Double
+        /// b 的那条线在哪
+        let positionB: Double
+    }
+
+    /// 两个框哪几条线对齐、哪几条差一点（near 个像素以内）。中线差半个像素也算对齐
+    static func alignments(_ a: PixelBox, _ b: PixelBox, near: Int) -> [Alignment] {
+        func lines(_ x: PixelBox) -> [Double] {
+            [Double(x.minX), Double(x.minX + x.maxX) / 2, Double(x.maxX), Double(x.minY), Double(x.minY + x.maxY) / 2, Double(x.maxY)]
+        }
+        let la = lines(a), lb = lines(b)
+        return Edge.allCases.compactMap { e in
+            let diff = Int(abs(la[e.rawValue] - lb[e.rawValue]))          // 0.5 → 0
+            return diff <= near ? Alignment(edge: e, diff: diff, positionA: la[e.rawValue], positionB: lb[e.rawValue]) : nil
+        }
+    }
+
+    /// 显示、复制的文字（点）："12"、"横 12、竖 8"、"上 12 下 12 左 16 右 16"；同一个、叠着的没有
+    static func text(_ r: Relation, scale: CGFloat) -> String? {
+        func pt(_ px: Int) -> String { MeasureText.points(px, scale: scale) }
+        switch r {
+        case .apart(let h?, let v?): return "横 \(pt(h))、竖 \(pt(v))"
+        case .apart(let h?, nil): return pt(h)
+        case .apart(nil, let v?): return pt(v)
+        case .inside(let t, let b, let l, let r): return "上 \(pt(t)) 下 \(pt(b)) 左 \(pt(l)) 右 \(pt(r))"
+        case .apart(nil, nil), .same, .overlapping: return nil
+        }
+    }
+}

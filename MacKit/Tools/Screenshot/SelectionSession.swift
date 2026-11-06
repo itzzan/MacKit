@@ -157,6 +157,10 @@ final class SelectionSession {
             view.onCancel = { [weak self] in self?.cancel() }
             view.onDone = { [weak self] in self?.finishCopy() }
             view.onSave = { [weak self] in self?.saveAs() }
+            view.onColorSave = { [weak view] in
+                guard let view, let c = view.pointedColor else { return }
+                view.showMagnifierNote(Self.saveColor(c))
+            }
             view.onColorPick = { [weak self, weak view] text in
                 if let c = view?.pointedColor { RecentColors.record(c.0, c.1, c.2) }       // 记进"最近的颜色"（台阶 15）
                 NSPasteboard.general.clearContents()
@@ -348,6 +352,16 @@ final class SelectionSession {
             editing.screen.overlay.makeKey()
             editing.screen.overlay.makeFirstResponder(editing.screen.view)
         }
+    }
+
+    /// ⌘1 按 S 存进调色板（台阶 24）：也记进"最近的颜色"；返回放大镜下面要写的那句话
+    static func saveColor(_ c: (Int, Int, Int)) -> String {
+        RecentColors.record(c.0, c.1, c.2)
+        let result = Palettes.save(ColorHistory.pack(c.0, c.1, c.2))
+        PaletteWindow.visible?.reload()
+        Log.capture.notice("color saved to palette")
+        return result.added ? "✓ 已存进「\(result.palette.name)」（\(result.palette.colors.count) 个）　接着指下一个按 S，Esc 退出"
+            : "「\(result.palette.name)」里已经有这个颜色了"
     }
 
     static func timestamp() -> String {
