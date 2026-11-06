@@ -366,6 +366,12 @@ enum Settings {
         set { store.set(newValue, forKey: "clipboard.ignoredApps") }
     }
 
+    /// 连续粘贴：贴完自动按 Tab 跳到下一个格子（台阶 23，默认关）
+    static var pasteQueueTab: Bool {
+        get { store.bool(forKey: "clipboard.queueTab") }
+        set { store.set(newValue, forKey: "clipboard.queueTab") }
+    }
+
     /// 最近取过的颜色（台阶 15），0xRRGGBB，最新的在前，最多 20 个
     static var recentColors: [Int] {
         get { store.array(forKey: "color.recent") as? [Int] ?? [] }

@@ -50,6 +50,7 @@ enum SelfTest {
         testPinAnnotation()
         testClipboard()
         testClipboardPlus()
+        testClipboardGroups()
         testRecorder(recorder)
         testRecordingExtras(recorder)
         testRecordingOverlays(recorder)
@@ -1654,6 +1655,198 @@ enum SelfTest {
         check(queued == expected, "小窗口里 ⌘ 点选两条、⌘回车：按点的先后排进连续粘贴")
     }
 
+    // MARK: 台阶 23 剪贴板小改进：收藏分组、改格式粘贴、连续粘贴贴完按 Tab（私有剪贴板、临时文件夹，不碰你的历史、不真按键）
+
+    private static func testClipboardGroups() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("MacKitClipGroups-\(UUID().uuidString)")
+        let pb = NSPasteboard(name: NSPasteboard.Name("local.mackit.selftest.clipgroups.\(UUID().uuidString)"))
+        let target = NSPasteboard(name: NSPasteboard.Name("local.mackit.selftest.clipgroups.target.\(UUID().uuidString)"))
+        let savedDefaults = snapshotDefaults()
+        defer {
+            try? FileManager.default.removeItem(at: dir)
+            pb.releaseGlobally()
+            target.releaseGlobally()
+            restoreDefaults(savedDefaults)
+        }
+        let store = ClipboardStore(directory: dir, limit: 50)
+        func add(_ t: String) -> ClipboardItem? {
+            pb.clearContents(); pb.setString(t, forType: .string)
+            guard case .success(let s) = ClipboardReader.read(pb, source: nil, ignoredApps: []) else { return nil }
+            return store.add(s)
+        }
+        let pdfText = "这是从 PDF 里复制出来的一段\n中文，每一行都断开了。\n\nThe quick brown\nfox jumps."
+        guard let addr = add("北京市朝阳区某某路 1 号"), let invoice = add("发票抬头：某某公司"), let home = add("家里地址：某某小区"),
+              let hello = add("hello world"), let pdf = add(pdfText) else { check(false, "收藏分组：准备几条"); return }
+        let tool = ClipboardTool(store: store, pasteboard: target)
+        let panel = tool.makePanel()
+        var popped: NSMenu?
+        panel.presentMenu = { popped = $0 }
+        panel.show(near: CGPoint(x: 400, y: 400), present: false)
+        defer { panel.close(returnFocus: false) }
+        func index(_ item: ClipboardItem) -> Int { panel.shown.firstIndex { $0.id == item.id } ?? 0 }
+        func enter() { _ = panel.control(panel.searchField, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:))) }
+        func favorite(_ item: ClipboardItem) -> ClipboardItem? { store.items.first { $0.id == item.id } }
+
+        // ⌘G → 新建分组…：还没收藏的先收藏，再放进新组
+        check(ClipboardPanel.footerText.contains("⌘G 分组") && ClipboardPanel.footerText.contains("⌘T 改格式粘贴"),
+              "小窗口下面的提示里有 ⌘G 分组、⌘T 改格式粘贴")
+        panel.select(index(invoice))
+        _ = panel.handleKey(key("g", code: 5, mods: .command))
+        check(popped?.items.filter { !$0.isSeparatorItem }.map(\.title) == ["收藏，不分组", "新建分组…"], "⌘G：还没有组时，小菜单里是\u{201C}收藏，不分组\u{201D}和\u{201C}新建分组…\u{201D}")
+        popped?.performActionForItem(at: (popped?.items.count ?? 1) - 1)
+        check(panel.naming == .newGroup(assign: invoice.id) && panel.searchField.placeholderString?.contains("新分组") == true,
+              "点\u{201C}新建分组…\u{201D}：搜索框变成打分组名字的地方")
+        panel.searchField.stringValue = "工作"
+        enter()
+        guard let work = store.groups.first else { check(false, "建好\u{201C}工作\u{201D}组"); return }
+        check(store.groups.map(\.name) == ["工作"] && favorite(invoice)?.isFavorite == true && favorite(invoice)?.favoriteGroup == work.id,
+              "打\u{201C}工作\u{201D}回车：建好组；这条先收藏、再放进去")
+        check(panel.tab == .favorites && panel.group == work.id && panel.shown.map(\.id) == [invoice.id] && panel.searchField.stringValue.isEmpty
+              && panel.naming == nil, "建好直接看这一组：只有这一条，搜索框恢复")
+        check(!panel.groupScroll.isHidden && panel.groupButtons.dropLast().map { $0.attributedTitle.string } == ["所有收藏", "工作"]
+              && panel.groupButtons[1].isSelectedLook && !panel.groupButtons[0].isSelectedLook, "搜索框下面一排：所有收藏 | 工作 | ＋，看着的那组亮着")
+        panel.window.contentView?.layoutSubtreeIfNeeded()
+        let searchFrame = panel.searchField.frame, barFrame = panel.groupScroll.frame
+        let listFrame = panel.table.enclosingScrollView?.frame ?? .zero
+        check(barFrame.maxY <= searchFrame.minY && listFrame.maxY <= barFrame.minY && barFrame.height == 28
+              && (panel.groupButtons.first?.frame.width ?? 0) > 40, "收藏栏的样子：分组那一排在搜索框下面、列表上面")
+        panel.setTab(.all)
+        panel.window.contentView?.layoutSubtreeIfNeeded()
+        check(panel.groupScroll.isHidden && (panel.table.enclosingScrollView?.frame.maxY ?? 0) <= searchFrame.minY - 8,
+              "\u{201C}全部\u{201D}栏里没有分组那一排，列表紧挨着搜索框")
+
+        // 再放一条进工作；点＋建"生活"
+        panel.select(index(addr))
+        _ = panel.handleKey(key("g", code: 5, mods: .command))
+        check(popped?.items.first?.title == "工作" && popped?.items.first?.state == .off, "⌘G 的小菜单里有\u{201C}工作\u{201D}")
+        popped?.performActionForItem(at: 0)
+        check(store.favorites(in: work.id).map(\.id) == [addr.id, invoice.id], "放进工作：新收藏的排在前面")
+        panel.setTab(.favorites)
+        panel.groupButtons.last?.performClick(nil)
+        check(panel.naming == .newGroup(assign: nil), "点＋：新建分组")
+        panel.searchField.stringValue = "生活"
+        enter()
+        guard let life = store.groups.last, life.name == "生活" else { check(false, "建好\u{201C}生活\u{201D}组"); return }
+        check(panel.group == life.id && panel.shown.isEmpty, "建好\u{201C}生活\u{201D}：直接看这一组，还是空的")
+        panel.setTab(.all)
+        panel.select(index(home))
+        _ = panel.handleKey(key("g", code: 5, mods: .command))
+        popped?.performActionForItem(at: 1)
+        check(favorite(home)?.favoriteGroup == life.id && store.favorites.map(\.id) == [home.id, addr.id, invoice.id], "家里地址放进生活")
+
+        // Tab 走一圈、⇧Tab 倒着走
+        panel.setTab(.all)
+        var stops: [String] = []
+        for _ in 0..<4 {
+            _ = panel.handleKey(key("\t", code: 48))
+            stops.append(panel.tab == .all ? "全部" : store.group(panel.group)?.name ?? "所有收藏")
+        }
+        check(stops == ["所有收藏", "工作", "生活", "全部"], "Tab 走一圈：全部 → 所有收藏 → 工作 → 生活 → 全部")
+        _ = panel.handleKey(key("\t", code: 48, mods: .shift))
+        check(panel.tab == .favorites && panel.group == life.id, "⇧Tab 倒着走：全部 → 生活")
+
+        // 组里：只看这一组、搜索、⌥数字、挪位置；所有收藏里每条带组名
+        panel.setGroup(work.id)
+        check(panel.shown.map(\.id) == [addr.id, invoice.id], "点\u{201C}工作\u{201D}：只看到工作的两条")
+        panel.searchField.stringValue = "家里"
+        panel.reload()
+        let otherHidden = panel.shown.isEmpty
+        panel.searchField.stringValue = "发票"
+        panel.reload()
+        check(otherHidden && panel.shown.map(\.id) == [invoice.id], "组里搜索只搜这一组")
+        panel.searchField.stringValue = ""
+        panel.reload()
+        panel.select(1)
+        _ = panel.handleKey(key("", code: 126, mods: [.command, .option]))
+        check(store.favorites(in: work.id).map(\.id) == [invoice.id, addr.id] && store.favorites.map(\.id) == [home.id, invoice.id, addr.id],
+              "组里 ⌥⌘↑ 挪位置：只在这一组里换，所有收藏的顺序跟着变")
+        let inGroup = panel.tableView(panel.table, viewFor: nil, row: 0) as? ClipboardRowView
+        panel.setGroup(nil)
+        let inAll = panel.tableView(panel.table, viewFor: nil, row: index(invoice)) as? ClipboardRowView
+        check(inAll?.detailText.contains("📁工作") == true && inGroup?.detailText.contains("📁") == false,
+              "所有收藏里每条下面带着组名；组里就不写了")
+        panel.setGroup(work.id)
+        var pasted: ClipboardItem?
+        let pasteBefore = panel.onPaste
+        panel.onPaste = { item, _ in pasted = item }
+        _ = panel.handleKey(key("2", code: 19, mods: .option))
+        check(pasted?.id == addr.id, "组里按 ⌥2：贴的是这一组的第二条")
+        panel.onPaste = pasteBefore
+        panel.show(near: CGPoint(x: 400, y: 400), present: false)
+
+        // 右键组名：改名、存盘、删组
+        panel.groupContextMenu(life.id).performActionForItem(at: 0)
+        check(panel.naming == .group(life.id) && panel.searchField.stringValue == "生活", "右键组名 → 改名…：搜索框里是原来的名字")
+        panel.searchField.stringValue = "家里"
+        enter()
+        check(store.group(life.id)?.name == "家里" && panel.naming == nil, "改名成\u{201C}家里\u{201D}")
+        let reopened = ClipboardStore(directory: dir, limit: 50)
+        reopened.load()
+        check(reopened.groups.map(\.name) == ["工作", "家里"] && reopened.favorites(in: work.id).map(\.id) == [invoice.id, addr.id]
+              && reopened.items.first { $0.id == home.id }?.favoriteGroup == life.id, "退出再打开：分组、组里的东西和顺序都在")
+        panel.setGroup(life.id)
+        panel.groupContextMenu(life.id).performActionForItem(at: 1)
+        check(store.groups.map(\.name) == ["工作"] && favorite(home)?.isFavorite == true && favorite(home)?.favoriteGroup == nil
+              && panel.group == nil && panel.shown.contains { $0.id == home.id }, "删掉\u{201C}家里\u{201D}：里面那条还在所有收藏里，变成不分组")
+        store.toggleFavorite(addr.id)
+        check(favorite(addr)?.favoriteGroup == nil && store.favorites(in: work.id).map(\.id) == [invoice.id], "取消收藏：也就离开了它的组")
+        let oldDir = dir.appendingPathComponent("old")
+        try? FileManager.default.createDirectory(at: oldDir, withIntermediateDirectories: true)
+        try? FileManager.default.copyItem(at: dir.appendingPathComponent("index.json"), to: oldDir.appendingPathComponent("index.json"))
+        let old = ClipboardStore(directory: oldDir, limit: 50)
+        old.load()
+        check(old.groups.isEmpty && old.favorites.count == store.favorites.count && old.favorites.allSatisfy { $0.favoriteGroup == nil },
+              "没有分组文件（老版本的历史）：收藏都在，都是不分组")
+
+        // ⌘T 改格式粘贴
+        panel.setTab(.all)
+        panel.select(index(pdf))
+        popped = nil
+        _ = panel.handleKey(key("t", code: 17, mods: .command))
+        check(popped?.items.dropFirst().map(\.keyEquivalent) == ["1", "2", "3", "4", "5"] && popped?.items.dropFirst().first?.title.hasPrefix("去掉断行") == true,
+              "⌘T：弹出改格式的小菜单，五种，按数字选")
+        target.clearContents(); target.setString("原来剪贴板里的", forType: .string)
+        popped?.performActionForItem(at: 1)
+        check(target.string(forType: .string) == "这是从 PDF 里复制出来的一段中文，每一行都断开了。\n\nThe quick brown fox jumps.",
+              "选\u{201C}去掉断行\u{201D}：剪贴板里是接好的一段（空行处还是分段）")
+        if case .failure(.ownRestore) = ClipboardReader.read(target, source: nil, ignoredApps: []) { check(true, "改好的带 MacKit 的标记，不会记进历史") }
+        else { check(false, "改好的带 MacKit 的标记") }
+        check(favorite(pdf).flatMap { ClipboardPaster.plainString(of: $0, store: store) } == pdfText && ClipboardPanel.visible == nil,
+              "历史里那条还是原样；贴完小窗口关掉")
+        panel.show(near: CGPoint(x: 400, y: 400), present: false)
+        panel.setTab(.all)
+        panel.select(index(hello))
+        _ = panel.handleKey(key("t", code: 17, mods: .command))
+        popped?.performActionForItem(at: 3)
+        check(target.string(forType: .string) == "HELLO WORLD" && favorite(hello)?.title == "hello world", "选\u{201C}全大写\u{201D}：贴出 HELLO WORLD，历史里还是 hello world")
+        let image = makeTestImage(width: 40, height: 30)
+        pb.clearContents(); pb.setData(ImageOutput.pngData(of: image, pointSize: NSSize(width: 40, height: 30)) ?? Data(), forType: .png)
+        if case .success(let snap) = ClipboardReader.read(pb, source: nil, ignoredApps: []) {
+            check(panel.formatMenu(for: store.add(snap)) == nil, "图片没有改格式的菜单")
+        } else { check(false, "图片没有改格式的菜单") }
+
+        // 连续粘贴贴完按 Tab（不挂真的钩子、不真按键：数一数要按几次）
+        let queue = tool.queue
+        UserDefaults.standard.removeObject(forKey: "clipboard.queueTab")
+        queue.bar.refreshTabButton()
+        check(!Settings.pasteQueueTab && !queue.bar.tabButton.isSelectedLook, "\u{201C}贴完按 Tab\u{201D}一开始关着")
+        guard let q1 = add("张三"), let q2 = add("男"), let q3 = add("28") else { check(false, "连续粘贴：准备三条"); return }
+        target.clearContents(); target.setString("原来剪贴板里的", forType: .string)
+        queue.start(with: [q1, q2, q3])
+        queue.handleCommandV(frontIsMe: false)
+        check(target.string(forType: .string) == q1.title && queue.tabRequests == 0, "关着时：⌘V 只换成下一条，不按 Tab")
+        queue.bar.tabButton.performClick(nil)
+        check(Settings.pasteQueueTab && queue.bar.tabButton.isSelectedLook, "小条上点\u{201C}贴完按 Tab\u{201D}：开了，按钮亮着，记在设置里")
+        queue.handleCommandV(frontIsMe: false)
+        check(target.string(forType: .string) == q2.title && queue.tabRequests == 1, "开着时：⌘V 换成下一条，接着按一次 Tab")
+        queue.handleCommandV(frontIsMe: true)
+        check(target.string(forType: .string) == q2.title && queue.tabRequests == 1, "在 MacKit 自己的窗口里按 ⌘V：不换、不按 Tab")
+        queue.handleCommandV(frontIsMe: false)
+        check(target.string(forType: .string) == q3.title && queue.tabRequests == 2, "最后一条贴完也按 Tab")
+        queue.finish()
+        check(!queue.isActive && target.string(forType: .string) == "原来剪贴板里的", "结束：剪贴板换回原来的")
+    }
+
     // MARK: 录屏（台阶 5）。真的录屏要弹系统窗口、占屏幕，不在这里做；这里测"录哪里、怎么录"算得对不对
 
     private static func testRecorder(_ tool: RecorderTool) {
@@ -2842,6 +3035,9 @@ enum SelfTest {
         check(store.items.count == 1 && store.items.first?.pinned == true && clip.countLabel.stringValue == "1 条，其中收藏 1 条"
               && !clip.clearButton.isEnabled, "剪贴板页：清空历史，收藏的留着")
         let pausedBefore = Settings.clipboardPaused
+        let queueTabBefore = Settings.pasteQueueTab
+        clip.queueTabBox.toggleForTest()
+        check(Settings.pasteQueueTab == !queueTabBefore && clip.queueTabBox.isOn == !queueTabBefore, "剪贴板页：连续粘贴贴完按 Tab 的开关")
         clip.pauseBox.toggleForTest()
         button("管理…", in: clip.view)?.performClick(nil)
         check(Settings.clipboardPaused == !pausedBefore && ignores == 1, "剪贴板页：暂停记录、管理不记录的软件")

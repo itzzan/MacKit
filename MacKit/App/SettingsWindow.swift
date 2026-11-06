@@ -550,6 +550,8 @@ final class RecordPane: SettingsPane {
 @MainActor
 final class ClipboardPane: SettingsPane {
     private(set) var pauseBox: ClosureCheckbox!
+    /// 连续粘贴贴完按 Tab（台阶 23）
+    private(set) var queueTabBox: ClosureCheckbox!
     let ignoreLabel = NSTextField(labelWithString: "")
     let countLabel = NSTextField(labelWithString: "")
     let pasteLabel = NSTextField(labelWithString: "")
@@ -566,6 +568,8 @@ final class ClipboardPane: SettingsPane {
         }
         countLabel.textColor = .secondaryLabelColor
         row("历史", [countLabel, clearButton])
+        queueTabBox = checkbox("贴完自动按 Tab，跳到下一个格子") { Settings.pasteQueueTab = $0 }
+        row("连续粘贴", [queueTabBox])
         let go = ClosureButton(title: "去打开") {
             ClipboardPaster.requestAccessibility()
             ClipboardPaster.openAccessibilitySettings()
@@ -577,6 +581,7 @@ final class ClipboardPane: SettingsPane {
 
     override func reload() {
         pauseBox?.isOn = Settings.clipboardPaused
+        queueTabBox?.isOn = Settings.pasteQueueTab
         ignoreLabel.stringValue = "\(ClipboardIgnoreList.ids.count) 个"
         let c = hooks.clipboardCounts()
         countLabel.stringValue = "\(c.all) 条，其中收藏 \(c.favorites) 条"

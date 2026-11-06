@@ -580,5 +580,22 @@ check(MagnifierMath.sourceRect(mouse: CGPoint(x: 1510, y: 2), screen: lensScreen
 check(MagnifierMath.zoom(2, step: 1) == 2.25 && MagnifierMath.zoom(3.9, step: 3) == 4 && MagnifierMath.zoom(1.6, step: -1) == 1.5,
       "滚轮一格调 0.25 倍，1.5 到 4 倍之间")
 
+// MARK: 改格式粘贴（台阶 23）
+let pdfZh = "这是从 PDF 里复制出来的一段\n中文，每一行都断开了，\n接起来不该多空格。\n\n第二段\n在这里。"
+check(ClipboardText.joinLines(pdfZh) == "这是从 PDF 里复制出来的一段中文，每一行都断开了，接起来不该多空格。\n\n第二段在这里。",
+      "去掉断行：中文直接接上，空行处还是分段")
+let pdfEn = "  The quick brown\r\nfox jumps over   the\r\nwell-\nknown lazy dog.\r\n\r\n\r\nNew paragraph\nhere.  "
+check(ClipboardText.joinLines(pdfEn) == "The quick brown fox jumps over the well-known lazy dog.\n\nNew paragraph here.",
+      "去掉断行：英文中间加一个空格；\\r\\n 也认；行尾断开的 well- 接上不加空格；好几个空行算一次分段")
+check(ClipboardText.joinLines("MacKit 是一个\nMac 工具箱\nfor me") == "MacKit 是一个Mac 工具箱for me",
+      "去掉断行：中英混排，挨着中文的不加空格")
+check(ClipboardText.squeezeSpaces("\n\n  a   b\t\tc  \n\n\n\n　中文　　空格　\nend  \n\n") == "a b c\n\n中文 空格\nend",
+      "去掉多余空格：连着的压成一个、首尾去掉、好几个空行压成一个")
+check(ClipboardText.reformat("Hello 世界 iPhone", .upper) == "HELLO 世界 IPHONE"
+      && ClipboardText.reformat("Hello 世界 iPhone", .lower) == "hello 世界 iphone", "全大写、全小写：只改英文字母")
+check(ClipboardText.capitalizeWords("hello world, don't stop. iPhone 3rd 中文abc") == "Hello World, Don't Stop. IPhone 3rd 中文Abc",
+      "每个词首字母大写：别的字母不动，don't 不拆开")
+check(ClipboardText.Format.allCases.count == 5 && ClipboardText.reformat("", .joinLines) == "", "五种格式；空的还是空的")
+
 print(failures == 0 ? "UNIT TESTS OK" : "UNIT TESTS FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)

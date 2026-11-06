@@ -3,7 +3,8 @@ import AppKit
 /// 剪贴板历史：排好序的列表 + 存盘。
 /// 顺序：按最近复制的在前（台阶 14 起收藏的不再挤在最上面，单独有一栏"收藏"，按你排的顺序）。
 /// 收藏的不受 200 条上限和"清空历史"影响。
-/// 存在 ~/Library/Application Support/MacKit/Clipboard/：index.json 是列表，大的内容放在 blobs/ 里
+/// 存在 ~/Library/Application Support/MacKit/Clipboard/：index.json 是列表，大的内容放在 blobs/ 里，
+/// 收藏分组表放在 groups.json（台阶 23；另存一个文件，index.json 的格式不变，老历史照样读）
 @MainActor
 final class ClipboardStore {
     nonisolated static let defaultDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -11,11 +12,14 @@ final class ClipboardStore {
     nonisolated static let inlineLimit = 32 * 1024
 
     private(set) var items: [ClipboardItem] = []
+    /// 收藏分组，按建的先后（台阶 23）
+    private(set) var groups: [ClipboardGroup] = []
     let directory: URL
     let limit: Int
     var onChange: (() -> Void)?
 
     private var indexURL: URL { directory.appendingPathComponent("index.json") }
+    private var groupsURL: URL { directory.appendingPathComponent("groups.json") }
     private var blobDirectory: URL { directory.appendingPathComponent("blobs", isDirectory: true) }
 
     init(directory: URL = ClipboardStore.defaultDirectory, limit: Int = 200) {
@@ -26,10 +30,26 @@ final class ClipboardStore {
     // MARK: 读写磁盘
 
     func load() {
+        if let data = try? Data(contentsOf: groupsURL),
+           let saved = try? JSONDecoder().decode([ClipboardGroup].self, from: data) { groups = saved }
         guard let data = try? Data(contentsOf: indexURL),
               let saved = try? JSONDecoder().decode([ClipboardItem].self, from: data) else { return }
         items = saved
-        Log.app.notice("clipboard: loaded \(saved.count) items")
+        // 组没了（比如分组文件丢了）：那几条当"不分组"
+        let ids = Set(groups.map(\.id))
+        for i in items.indices where items[i].favoriteGroup.map({ !ids.contains($0) || !items[i].pinned }) == true {
+            items[i].favoriteGroup = nil
+        }
+        Log.app.notice("clipboard: loaded \(saved.count) items, \(self.groups.count) groups")
+    }
+
+    private func saveGroups() {
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try JSONEncoder().encode(groups).write(to: groupsURL, options: .atomic)
+        } catch {
+            Log.app.error("clipboard: groups save failed \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private func save() {
@@ -114,6 +134,7 @@ final class ClipboardStore {
             items[index].pinned = false
             items[index].favoriteName = nil
             items[index].favoriteOrder = nil
+            items[index].favoriteGroup = nil                         // 取消收藏也就离开了它的组
         } else {
             let first = favorites.first?.favoriteOrder ?? 0
             items[index].pinned = true
@@ -136,15 +157,69 @@ final class ClipboardStore {
         save()
     }
 
-    /// 在收藏栏里挪到第 to 个
-    func moveFavorite(_ id: UUID, to: Int) {
+    /// 在收藏栏里挪到第 to 个。group 不是 nil：在这个组里挪（只在这一组的几条之间换位置，"所有收藏"的顺序跟着变）
+    func moveFavorite(_ id: UUID, to: Int, in group: UUID? = nil) {
         var list = favorites
-        guard let from = list.firstIndex(where: { $0.id == id }) else { return }
-        let item = list.remove(at: from)
-        list.insert(item, at: min(max(to, 0), list.count))
+        let slots = list.indices.filter { group == nil || list[$0].favoriteGroup == group }   // 这一组占着哪几个位置
+        var sub = slots.map { list[$0] }
+        guard let from = sub.firstIndex(where: { $0.id == id }) else { return }
+        let item = sub.remove(at: from)
+        sub.insert(item, at: min(max(to, 0), sub.count))
+        for (slot, f) in zip(slots, sub) { list[slot] = f }
         for (order, f) in list.enumerated() {
             if let i = items.firstIndex(where: { $0.id == f.id }) { items[i].favoriteOrder = order }
         }
+        save()
+    }
+
+    // MARK: 收藏分组（台阶 23）
+
+    /// 收藏栏里的一组；group = nil 是"所有收藏"
+    func favorites(in group: UUID?) -> [ClipboardItem] {
+        guard let group else { return favorites }
+        return favorites.filter { $0.favoriteGroup == group }
+    }
+
+    func group(_ id: UUID?) -> ClipboardGroup? { id.flatMap { id in groups.first { $0.id == id } } }
+
+    /// 新建一个组（同名的已经有了就用那个）。名字空的不建
+    @discardableResult
+    func addGroup(_ name: String) -> ClipboardGroup? {
+        let trimmed = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(30))
+        guard !trimmed.isEmpty else { return nil }
+        if let same = groups.first(where: { $0.name == trimmed }) { return same }
+        let g = ClipboardGroup(id: UUID(), name: trimmed)
+        groups.append(g)
+        saveGroups()
+        onChange?()
+        return g
+    }
+
+    func renameGroup(_ id: UUID, _ name: String) {
+        let trimmed = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(30))
+        guard !trimmed.isEmpty, let i = groups.firstIndex(where: { $0.id == id }) else { return }
+        groups[i].name = trimmed
+        saveGroups()
+        onChange?()
+    }
+
+    /// 删掉一个组：里面的收藏不删，变成"不分组"
+    func deleteGroup(_ id: UUID) {
+        groups.removeAll { $0.id == id }
+        for i in items.indices where items[i].favoriteGroup == id { items[i].favoriteGroup = nil }
+        saveGroups()
+        save()
+    }
+
+    /// ⌘G：放进哪个组（nil = 不分组）。还没收藏的先收藏
+    func setGroup(_ itemID: UUID, _ group: UUID?) {
+        guard let index = items.firstIndex(where: { $0.id == itemID }) else { return }
+        if !items[index].pinned {
+            items[index].pinned = true
+            items[index].favoriteOrder = (favorites.first?.favoriteOrder ?? 0) - 1
+            normalizeFavoriteOrder()
+        }
+        items[index].favoriteGroup = self.group(group)?.id
         save()
     }
 

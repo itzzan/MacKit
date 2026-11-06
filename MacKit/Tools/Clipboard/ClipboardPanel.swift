@@ -29,14 +29,28 @@ final class ClipboardPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate
     var onPin: ((ClipboardItem) -> Void)?
     /// ⌘ 点选几条后按 ⌘回车：按点的顺序连续粘贴（台阶 14）
     var onQueue: (([ClipboardItem]) -> Void)?
+    /// ⌘T 改格式粘贴（台阶 23）：(这条, 改好的字)
+    var onPasteText: ((ClipboardItem, String) -> Void)?
 
     /// 上面一排"全部 | 收藏"（台阶 14），Tab 切换
     enum Tab: Int { case all, favorites }
     private(set) var tab: Tab = .all
     let tabs = NSSegmentedControl(labels: ["全部", "收藏"], trackingMode: .selectOne, target: nil, action: nil)
-    /// ⌘R 改名时：借用搜索框打名字
-    private(set) var renamingID: UUID?
+    /// 收藏栏里看哪一组（台阶 23）；nil = 所有收藏
+    private(set) var group: UUID?
+    /// 搜索框借来打名字时在干什么：给一条起名（⌘R）、新建分组（建好放进哪条）、给组改名
+    enum Naming: Equatable { case item(UUID), newGroup(assign: UUID?), group(UUID) }
+    private(set) var naming: Naming?
+    /// ⌘R 起名的那条
+    var renamingID: UUID? { if case .item(let id) = naming { return id } else { return nil } }
     private var savedQuery = ""
+    /// 收藏栏里搜索框下面那一排："所有收藏 | 工作 | 生活 | ＋"（台阶 23）
+    let groupBar = NSStackView()
+    let groupScroll = NSScrollView()
+    /// 第一个是"所有收藏"，后面按组的先后，最后是"＋"
+    private(set) var groupButtons: [ToolbarButton] = []
+    private var listTopToSearch: NSLayoutConstraint?
+    private var listTopToGroups: NSLayoutConstraint?
     /// ⌘ 点选的先后（表格只记得选了哪些，不记得先点哪个）
     private(set) var pickOrder: [UUID] = []
     static let rowDragType = NSPasteboard.PasteboardType("local.mackit.clipboard.row")
@@ -48,7 +62,7 @@ final class ClipboardPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate
     private let store: ClipboardStore
     private(set) var shown: [ClipboardItem] = []
     private let thumbnails = NSCache<NSString, NSImage>()
-    static let size = CGSize(width: 440, height: 480)
+    static let size = CGSize(width: 440, height: 500)
 
     init(store: ClipboardStore) {
         self.store = store
@@ -113,7 +127,7 @@ final class ClipboardPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate
         scroll.drawsBackground = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
-        let footer = NSTextField(wrappingLabelWithString: "回车粘贴　⇧回车纯文字　⌥1–9 快速粘贴　⌘P 收藏　⌘R 起名　⌘⌫ 删除　⌘2 贴图\nTab 切换全部 / 收藏　⌘ 点选几条后 ⌘回车 = 按顺序连续粘贴")
+        let footer = NSTextField(wrappingLabelWithString: Self.footerText)
         footer.font = Theme.small()
         footer.textColor = .secondaryLabelColor
         footer.translatesAutoresizingMaskIntoConstraints = false
@@ -128,14 +142,38 @@ final class ClipboardPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate
         tabs.refusesFirstResponder = true
         tabs.translatesAutoresizingMaskIntoConstraints = false
         footer.preferredMaxLayoutWidth = Self.size.width - 24
-        for v in [tabs, searchField, scroll, footer, emptyLabel] as [NSView] { background.addSubview(v) }
+
+        // 分组那一排：组多了放不下就左右滚
+        groupBar.orientation = .horizontal
+        groupBar.spacing = 4
+        groupBar.translatesAutoresizingMaskIntoConstraints = false
+        groupScroll.documentView = groupBar
+        groupScroll.drawsBackground = false
+        groupScroll.hasHorizontalScroller = false
+        groupScroll.hasVerticalScroller = false
+        groupScroll.verticalScrollElasticity = .none
+        groupScroll.translatesAutoresizingMaskIntoConstraints = false
+        groupScroll.isHidden = true
+
+        for v in [tabs, searchField, groupScroll, scroll, footer, emptyLabel] as [NSView] { background.addSubview(v) }
+        let toSearch = scroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8)
+        let toGroups = scroll.topAnchor.constraint(equalTo: groupScroll.bottomAnchor, constant: 4)
+        listTopToSearch = toSearch
+        listTopToGroups = toGroups
         NSLayoutConstraint.activate([
             tabs.centerYAnchor.constraint(equalTo: searchField.centerYAnchor),
             tabs.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 12),
             searchField.topAnchor.constraint(equalTo: background.topAnchor, constant: 12),
             searchField.leadingAnchor.constraint(equalTo: tabs.trailingAnchor, constant: 8),
             searchField.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -12),
-            scroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
+            groupScroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 6),
+            groupScroll.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 10),
+            groupScroll.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -10),
+            groupScroll.heightAnchor.constraint(equalToConstant: 28),
+            groupBar.leadingAnchor.constraint(equalTo: groupScroll.contentView.leadingAnchor),
+            groupBar.topAnchor.constraint(equalTo: groupScroll.contentView.topAnchor),
+            groupBar.bottomAnchor.constraint(equalTo: groupScroll.contentView.bottomAnchor),
+            toSearch,
             scroll.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 6),
             scroll.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -6),
             scroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -6),
@@ -145,6 +183,10 @@ final class ClipboardPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate
             emptyLabel.centerYAnchor.constraint(equalTo: scroll.centerYAnchor),
         ])
     }
+
+    static let footerText = "回车粘贴　⇧回车纯文字　⌘T 改格式粘贴　⌥1–9 快速粘贴　⌘2 贴图\n"
+        + "⌘P 收藏　⌘G 分组　⌘R 起名　⌘⌫ 删除　Tab 切换全部 / 收藏 / 各组\n"
+        + "⌘ 点选几条后 ⌘回车 = 按顺序连续粘贴"
 
     // MARK: 显示、关闭
 
@@ -179,24 +221,122 @@ final class ClipboardPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate
     // MARK: 列表
 
     func reload() {
-        guard renamingID == nil else { return }                  // 改名时搜索框里是名字，不拿来筛
+        guard naming == nil else { return }                      // 改名时搜索框里是名字，不拿来筛
+        if store.group(group) == nil { group = nil }             // 看着的组被删了：回到所有收藏
         let query = searchField.stringValue
-        let source = tab == .all ? store.items : store.favorites
+        let source = tab == .all ? store.items : store.favorites(in: group)
         shown = source.filter { ClipboardText.matches(query, in: $0.searchText + " " + $0.title + " " + ($0.favoriteName ?? "")) }
         table.reloadData()
         tabs.setLabel("收藏（\(store.favorites.count)）", forSegment: 1)
         emptyLabel.isHidden = !shown.isEmpty
         emptyLabel.stringValue = tab == .favorites && store.favorites.isEmpty ? "还没有收藏。选中一条按 ⌘P 收进来"
+            : tab == .favorites && group != nil && query.isEmpty ? "这一组还没有东西。在别处选中一条按 ⌘G 放进来"
             : store.items.isEmpty ? "还没有记录。复制点什么试试" : "没有找到"
+        updateGroupBar()
         if !shown.isEmpty { select(0) }
     }
 
-    /// Tab / 点上面那一排：全部 ↔ 收藏
-    func setTab(_ t: Tab) {
-        if renamingID != nil { cancelRename() }
+    /// 点上面那一排：全部 ↔ 收藏（收藏栏看所有收藏）
+    func setTab(_ t: Tab) { setView(t, group: nil) }
+
+    /// 收藏栏里只看这一组（nil = 所有收藏）
+    func setGroup(_ id: UUID?) { setView(.favorites, group: id) }
+
+    private func setView(_ t: Tab, group g: UUID?) {
+        if naming != nil { cancelRename() }
         tab = t
+        group = t == .favorites ? store.group(g)?.id : nil
         tabs.selectedSegment = t.rawValue
         reload()
+    }
+
+    /// Tab 走一圈：全部 → 所有收藏 → 各组 → 回到全部；⇧Tab 倒着走
+    func cycleTab(back: Bool = false) {
+        let stops: [(Tab, UUID?)] = [(.all, nil), (.favorites, nil)] + store.groups.map { (.favorites, $0.id) }
+        let current = stops.firstIndex { $0.0 == tab && $0.1 == group } ?? 0
+        let next = stops[(current + (back ? stops.count - 1 : 1)) % stops.count]
+        setView(next.0, group: next.1)
+    }
+
+    /// 分组那一排：只在收藏栏里出现；看着的那组是主题色底
+    private func updateGroupBar() {
+        let showing = tab == .favorites
+        groupScroll.isHidden = !showing
+        listTopToSearch?.isActive = false
+        listTopToGroups?.isActive = false
+        (showing ? listTopToGroups : listTopToSearch)?.isActive = true
+        guard showing else { return }
+        for b in groupButtons { groupBar.removeArrangedSubview(b); b.removeFromSuperview() }
+        var buttons = [ToolbarButton(title: "所有收藏", tip: "看全部收藏", size: 26) { [weak self] in self?.setGroup(nil) }]
+        for g in store.groups {
+            let b = ToolbarButton(title: g.name, tip: "只看「\(g.name)」（右键改名、删除）", size: 26) { [weak self] in self?.setGroup(g.id) }
+            b.menu = groupContextMenu(g.id)
+            buttons.append(b)
+        }
+        buttons.append(ToolbarButton(symbol: "plus", tip: "新建分组", size: 26) { [weak self] in self?.startNaming(.newGroup(assign: nil)) })
+        buttons[0].isSelectedLook = group == nil
+        for (b, g) in zip(buttons.dropFirst(), store.groups) { b.isSelectedLook = g.id == group }
+        // 小窗口跟着系统深浅色：没选中的用系统文字色，选中的主题色底白字
+        for b in buttons { b.contentTintColor = b.isSelectedLook ? .white : .labelColor }
+        for b in buttons { groupBar.addArrangedSubview(b) }
+        groupButtons = buttons
+        groupBar.layoutSubtreeIfNeeded()
+        if let i = store.groups.firstIndex(where: { $0.id == group }) { buttons[i + 1].scrollToVisible(buttons[i + 1].bounds) }
+    }
+
+    /// 右键点组名：改名、删掉
+    func groupContextMenu(_ id: UUID) -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(ActionMenuItem("改名…") { [weak self] in self?.startNaming(.group(id)) })
+        menu.addItem(ActionMenuItem("删掉这个组（里面的收藏不删）") { [weak self] in self?.deleteGroup(id) })
+        return menu
+    }
+
+    func deleteGroup(_ id: UUID) {
+        store.deleteGroup(id)
+        if group == id { group = nil }
+        reload()
+    }
+
+    // MARK: ⌘G 放进分组
+
+    /// ⌘G 的小菜单：各组（打勾的是现在在的）、不分组、新建分组…
+    func groupMenu(for item: ClipboardItem) -> NSMenu {
+        let menu = NSMenu()
+        for g in store.groups {
+            let mi = ActionMenuItem(g.name) { [weak self] in self?.assign(item.id, to: g.id) }
+            mi.state = item.isFavorite && item.favoriteGroup == g.id ? .on : .off
+            menu.addItem(mi)
+        }
+        let none = ActionMenuItem(item.isFavorite ? "不分组" : "收藏，不分组") { [weak self] in self?.assign(item.id, to: nil) }
+        none.state = item.isFavorite && item.favoriteGroup == nil ? .on : .off
+        menu.addItem(none)
+        menu.addItem(.separator())
+        menu.addItem(ActionMenuItem("新建分组…") { [weak self] in self?.startNaming(.newGroup(assign: item.id)) })
+        return menu
+    }
+
+    func showGroupMenu() {
+        guard let item = selectedItem else { return }
+        popUpAtSelection(groupMenu(for: item))
+    }
+
+    /// 放进哪个组（nil = 不分组；还没收藏的先收藏）
+    func assign(_ id: UUID, to g: UUID?) {
+        store.setGroup(id, g)
+        reload()
+        if let i = shown.firstIndex(where: { $0.id == id }) { select(i) }
+    }
+
+    /// 自检里换成"记下弹了哪个菜单"（真的弹菜单会卡住等你点）
+    var presentMenu: ((NSMenu) -> Void)?
+
+    /// 小菜单弹在选中那一行下面
+    private func popUpAtSelection(_ menu: NSMenu) {
+        if let presentMenu { presentMenu(menu); return }
+        let row = table.selectedRow >= 0 ? table.selectedRow : 0
+        let rect = shown.isEmpty ? .zero : table.rect(ofRow: row)
+        menu.popUp(positioning: nil, at: CGPoint(x: 44, y: rect.maxY), in: table)
     }
 
     @objc private func tabClicked() { setTab(Tab(rawValue: tabs.selectedSegment) ?? .all) }
@@ -256,7 +396,7 @@ final class ClipboardPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate
     }
 
     func moveFavorite(_ id: UUID, to index: Int) {
-        store.moveFavorite(id, to: index)
+        store.moveFavorite(id, to: index, in: group)
         reload()
         if let i = shown.firstIndex(where: { $0.id == id }) { select(i) }
     }
@@ -273,7 +413,8 @@ final class ClipboardPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate
         let cell = (tableView.makeView(withIdentifier: id, owner: nil) as? ClipboardRowView) ?? ClipboardRowView()
         cell.identifier = id
         let item = shown[row]
-        cell.configure(item: item, icon: icon(for: item), shortcut: row < 9 ? "⌥\(row + 1)" : "")
+        let groupName = group == nil ? store.group(item.favoriteGroup)?.name : nil     // 组里就不用再写组名
+        cell.configure(item: item, icon: icon(for: item), shortcut: row < 9 ? "⌥\(row + 1)" : "", groupName: groupName)
         return cell
     }
 
@@ -309,31 +450,91 @@ final class ClipboardPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate
         Toast.show(store.items.first { $0.id == item.id }?.isFavorite == true ? "✓ 收藏了" : "已取消收藏")
     }
 
-    // MARK: ⌘R 起名字
+    // MARK: ⌘R 起名字、新建分组、给组改名（都借搜索框打字）
 
     func startRename() {
         guard let item = selectedItem else { return }
-        savedQuery = searchField.stringValue
-        renamingID = item.id
-        searchField.stringValue = item.favoriteName ?? ""
-        searchField.placeholderString = "给这条起个名字（回车确定，Esc 取消）"
+        startNaming(.item(item.id))
+    }
+
+    func startNaming(_ n: Naming) {
+        if naming == nil { savedQuery = searchField.stringValue }
+        naming = n
+        switch n {
+        case .item(let id):
+            searchField.stringValue = store.items.first { $0.id == id }?.favoriteName ?? ""
+            searchField.placeholderString = "给这条起个名字（回车确定，Esc 取消）"
+        case .newGroup:
+            searchField.stringValue = ""
+            searchField.placeholderString = "新分组的名字，比如\u{201C}工作\u{201D}（回车确定，Esc 取消）"
+        case .group(let id):
+            searchField.stringValue = store.group(id)?.name ?? ""
+            searchField.placeholderString = "分组的新名字（回车确定，Esc 取消）"
+        }
         window.makeFirstResponder(searchField)
     }
 
     func commitRename() {
-        guard let id = renamingID else { return }
-        store.setFavoriteName(id, searchField.stringValue)
+        guard let n = naming else { return }
+        let text = searchField.stringValue
+        var selectID: UUID?
+        var openGroup: UUID?
+        switch n {
+        case .item(let id):
+            store.setFavoriteName(id, text)
+            selectID = id
+        case .newGroup(let assign):
+            if let g = store.addGroup(text) {
+                if let assign { store.setGroup(assign, g.id) }
+                openGroup = g.id
+                selectID = assign
+            }
+        case .group(let id):
+            store.renameGroup(id, text)
+        }
         endRename()
-        if let i = shown.firstIndex(where: { $0.id == id }) { select(i) }
+        if let openGroup { setGroup(openGroup) }                 // 建好了直接看这一组
+        if let selectID, let i = shown.firstIndex(where: { $0.id == selectID }) { select(i) }
     }
 
     func cancelRename() { endRename() }
 
     private func endRename() {
-        renamingID = nil
+        naming = nil
         searchField.stringValue = savedQuery
         searchField.placeholderString = "搜索剪贴板历史"
         reload()
+    }
+
+    // MARK: ⌘T 改格式粘贴（台阶 23）
+
+    /// 改格式的小菜单：按数字或点一下。图片、文件没有（返回 nil）
+    func formatMenu(for item: ClipboardItem) -> NSMenu? {
+        guard item.kind == .text || item.kind == .richText else { return nil }
+        let menu = NSMenu()
+        menu.addItem(.info("改格式粘贴（贴纯文字，历史里这条不变）"))
+        for f in ClipboardText.Format.allCases {
+            menu.addItem(ActionMenuItem(f.title, key: "\(f.rawValue + 1)", modifiers: []) { [weak self] in
+                self?.pasteFormatted(item, f)
+            })
+        }
+        return menu
+    }
+
+    func showFormatMenu() {
+        guard let item = selectedItem else { return }
+        guard let menu = formatMenu(for: item) else {
+            Toast.show("只有文字能改格式")
+            return
+        }
+        popUpAtSelection(menu)
+    }
+
+    /// 按选好的格式改好，贴到原来的软件里（历史里那条不变）
+    func pasteFormatted(_ item: ClipboardItem, _ f: ClipboardText.Format) {
+        guard let text = ClipboardPaster.plainString(of: item, store: store) else { return }
+        close(returnFocus: true)
+        onPasteText?(item, ClipboardText.reformat(text, f))
     }
 
     /// ⌘回车：⌘ 点选的几条按顺序连续粘贴
@@ -354,25 +555,25 @@ final class ClipboardPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate
 
     // MARK: 键盘
 
-    func controlTextDidChange(_ obj: Notification) { if renamingID == nil { reload() } }
+    func controlTextDidChange(_ obj: Notification) { if naming == nil { reload() } }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         switch selector {
         case #selector(NSResponder.moveUp(_:)): select(selectedIndex - 1)
         case #selector(NSResponder.moveDown(_:)): select(selectedIndex + 1)
         case #selector(NSResponder.insertNewline(_:)):
-            if renamingID != nil { commitRename(); return true }
+            if naming != nil { commitRename(); return true }
             guard let item = selectedItem else { return true }
             paste(item, plainText: NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false)
         case #selector(NSResponder.cancelOperation(_:)):
-            if renamingID != nil { cancelRename(); return true }
+            if naming != nil { cancelRename(); return true }
             close(returnFocus: true)
         default: return false
         }
         return true
     }
 
-    /// 在交给搜索框之前先截下来的键：⌥1–9、⌘P、⌘⌫、⇧回车（有的输入法会吞掉）
+    /// 在交给搜索框之前先截下来的键：⌥1–9、⌘P、⌘⌫、⇧回车（有的输入法会吞掉）、⌘G、⌘T、Tab
     func handleKey(_ event: NSEvent) -> Bool {
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let digits: [UInt16: Int] = [18: 1, 19: 2, 20: 3, 21: 4, 23: 5, 22: 6, 26: 7, 28: 8, 25: 9]
@@ -380,8 +581,10 @@ final class ClipboardPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate
             if shown.indices.contains(n - 1) { paste(shown[n - 1], plainText: false) }
             return true
         }
-        if renamingID != nil { return false }                                                // 改名时键都交给搜索框
-        if mods.isEmpty && event.keyCode == 48 { setTab(tab == .all ? .favorites : .all); return true }   // Tab
+        if naming != nil { return false }                                                    // 改名时键都交给搜索框
+        if event.keyCode == 48 && (mods.isEmpty || mods == .shift) { cycleTab(back: mods == .shift); return true }   // Tab / ⇧Tab
+        if mods == .command && event.keyCode == 5 { showGroupMenu(); return true }           // ⌘G 分组
+        if mods == .command && event.keyCode == 17 { showFormatMenu(); return true }         // ⌘T 改格式粘贴
         if mods == .command && event.keyCode == 35 { togglePinSelected(); return true }      // ⌘P 收藏
         if mods == .command && event.keyCode == 15 { startRename(); return true }            // ⌘R 起名
         if mods == .command && event.keyCode == 51 { deleteSelected(); return true }         // ⌘⌫
@@ -483,12 +686,14 @@ final class ClipboardRowView: NSTableCellView {
     required init?(coder: NSCoder) { fatalError("not supported") }
 
     private(set) var titleText = ""
+    var detailText: String { detail.stringValue }
 
-    func configure(item: ClipboardItem, icon image: NSImage, shortcut key: String) {
+    func configure(item: ClipboardItem, icon image: NSImage, shortcut key: String, groupName: String? = nil) {
         icon.image = image
         titleText = (item.isFavorite ? "⭐ " : "") + item.displayTitle
         title.stringValue = titleText
         var parts: [String] = []
+        if let groupName { parts.append("📁" + groupName) }                 // 在哪个组（台阶 23）
         if item.favoriteName != nil { parts.append(item.title) }            // 起了名字：下面一行带上原来的内容
         if let name = item.sourceName { parts.append(name) }
         parts.append(ClipboardText.relativeTime(item.lastCopied))

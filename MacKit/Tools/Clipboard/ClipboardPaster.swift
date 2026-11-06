@@ -9,10 +9,7 @@ enum ClipboardPaster {
     @discardableResult
     static func write(_ item: ClipboardItem, plainText: Bool, store: ClipboardStore, to pb: NSPasteboard) -> Bool {
         if plainText, let text = plainString(of: item, store: store) {
-            pb.clearContents()
-            pb.declareTypes([.string, ClipboardReader.restoreMarker], owner: nil)
-            pb.setString(text, forType: .string)
-            pb.setData(Data(), forType: ClipboardReader.restoreMarker)
+            writeText(text, to: pb)
             return true
         }
         var objects: [NSPasteboardItem] = []
@@ -26,6 +23,14 @@ enum ClipboardPaster {
         }
         pb.clearContents()
         return pb.writeObjects(objects)
+    }
+
+    /// 只放纯文字，带 MacKit 的标记（剪贴板历史不会再记一遍）
+    static func writeText(_ text: String, to pb: NSPasteboard) {
+        pb.clearContents()
+        pb.declareTypes([.string, ClipboardReader.restoreMarker], owner: nil)
+        pb.setString(text, forType: .string)
+        pb.setData(Data(), forType: ClipboardReader.restoreMarker)
     }
 
     static func plainString(of item: ClipboardItem, store: ClipboardStore) -> String? {

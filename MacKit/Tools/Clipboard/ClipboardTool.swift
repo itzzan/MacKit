@@ -77,6 +77,7 @@ final class ClipboardTool: ToolModule {
         p.onPaste = { [weak self] item, plain in self?.paste(item, plainText: plain) }
         p.onPin = { [weak self] item in self?.pin(item) }
         p.onQueue = { [weak self] items in self?.queue.start(with: items) }
+        p.onPasteText = { [weak self] item, text in self?.paste(item, text: text) }
         return p
     }
 
@@ -96,6 +97,19 @@ final class ClipboardTool: ToolModule {
                 Settings.askedAccessibility = true
                 ClipboardPaster.requestAccessibility()               // 第一次：让系统弹授权提示
             }
+        }
+    }
+
+    /// ⌘T 改格式粘贴（台阶 23）：改好的字按纯文字放进剪贴板（带 MacKit 的标记，不记进历史），历史里那条不变
+    func paste(_ item: ClipboardItem, text: String) {
+        store.touch(item.id)
+        let pb = queue.pasteboard                                 // 平时是系统剪贴板；自检里是私有的
+        ClipboardPaster.writeText(text, to: pb)
+        guard pb == NSPasteboard.general else { return }          // 自检：不替你按 ⌘V
+        if ClipboardPaster.canAutoPaste {
+            ClipboardPaster.pasteIntoFrontApp()
+        } else {
+            Toast.show("✓ 改好了，按 ⌘V 粘贴。想直接贴进去：菜单栏 MacKit →「自动粘贴」去开权限", seconds: 4)
         }
     }
 

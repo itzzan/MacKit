@@ -35,10 +35,18 @@ struct ClipboardItem: Codable, Identifiable, Equatable {
     var favoriteName: String? = nil
     /// 在收藏栏里排第几（小的在前）；老文件里没有，按原来的先后
     var favoriteOrder: Int? = nil
+    /// 放在哪个收藏分组里（台阶 23，存组的编号；nil = 不分组）
+    var favoriteGroup: UUID? = nil
 
     var isFavorite: Bool { pinned }
     /// 列表里显示的名字：起了名字用名字
     var displayTitle: String { favoriteName ?? title }
+}
+
+/// 收藏分组（台阶 23）："工作""生活"……一条收藏只放进一个组（像文件夹）
+struct ClipboardGroup: Codable, Identifiable, Equatable {
+    let id: UUID
+    var name: String
 }
 
 /// 刚从剪贴板读到、还没存的内容

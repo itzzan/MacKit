@@ -6,7 +6,8 @@ import Carbon.HIToolbox
 ///
 /// 开着时在系统里挂一个"按键钩子"，只认 ⌘V：在 ⌘V 送到软件之前把剪贴板换成下一条，然后照常放行。
 /// 钩子是"拦得住"的那种（要辅助功能权限，你已经开过），所以一定是先换好剪贴板、软件才收到 ⌘V。
-/// 贴完或结束：摘掉钩子，剪贴板换回开始之前的内容。只在开着时碰 ⌘V，结束就完全不碰
+/// 贴完或结束：摘掉钩子，剪贴板换回开始之前的内容。只在开着时碰 ⌘V，结束就完全不碰。
+/// 台阶 23：开着"贴完按 Tab"时，每贴一条 MacKit 接着替你按一下 Tab，跳到下一个格子
 @MainActor
 final class PasteQueueController {
     private(set) var queue = PasteQueue<UUID>()
@@ -33,6 +34,8 @@ final class PasteQueueController {
     }
 
     var taken: Int { queue.next }
+    /// 替你按过几次 Tab（自检里数这个，不真按）
+    private(set) var tabRequests = 0
 
     /// 开始。items 是小窗口里 ⌘ 点选好的几条；空 = 等你接着复制
     @discardableResult
@@ -82,6 +85,27 @@ final class PasteQueueController {
         refresh()
         if queue.isFinished { finishSoon() }
         return true
+    }
+
+    /// 钩子里看到 ⌘V：在 MacKit 自己的窗口里不算；换好下一条后，开着"贴完按 Tab"就等软件贴好，再替你按一下 Tab
+    func handleCommandV(frontIsMe: Bool) {
+        guard !frontIsMe, willPaste(), Settings.pasteQueueTab else { return }
+        tabRequests += 1
+        guard live else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(150))
+            Self.pressTab()
+        }
+    }
+
+    /// 按一下 Tab：明确不带修饰键（你可能还按着 ⌘，不然就成了 ⌘Tab 切软件）
+    static func pressTab() {
+        let source = CGEventSource(stateID: .privateState)
+        for down in [true, false] {
+            let e = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Tab), keyDown: down)
+            e?.flags = []
+            e?.post(tap: .cghidEventTap)
+        }
     }
 
     /// 最后一条交给软件之后再收尾，免得软件还没读剪贴板就被换回去了
@@ -177,19 +201,20 @@ private func pasteQueueTapCallback(proxy: CGEventTapProxy, type: CGEventType, ev
           !flags.contains(.maskControl) else { return Unmanaged.passUnretained(event) }
     MainActor.assumeIsolated {
         // 在 MacKit 自己的窗口里（比如剪贴板搜索框）按 ⌘V 不算
-        if NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier {
-            _ = controller.willPaste()
-        }
+        controller.handleCommandV(frontIsMe: NSWorkspace.shared.frontmostApplication?.processIdentifier
+                                  == ProcessInfo.processInfo.processIdentifier)
     }
     return Unmanaged.passUnretained(event)
 }
 
-/// 屏幕右上角的小条："连续粘贴 2 / 5　下一条：张三…　结束"
+/// 屏幕右上角的小条："连续粘贴 2 / 5　下一条：张三…　贴完按 Tab　结束"
 @MainActor
 final class PasteQueueBar {
     let panel: NSPanel
     let label = Theme.label("")
     var onEnd: (() -> Void)?
+    /// "贴完按 Tab"开关（台阶 23）：亮着 = 开；记住上次的选择
+    private(set) var tabButton: ToolbarButton!
 
     init() {
         panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -208,8 +233,20 @@ final class PasteQueueBar {
         label.translatesAutoresizingMaskIntoConstraints = false
         label.widthAnchor.constraint(lessThanOrEqualToConstant: 380).isActive = true
         let end = ToolbarButton(title: "结束", tip: "结束连续粘贴，剪贴板换回原来的", style: .secondary) { [weak self] in self?.onEnd?() }
-        let row = Theme.row([icon, label, end], spacing: 8, insets: NSEdgeInsets(top: 5, left: 12, bottom: 5, right: 6))
+        tabButton = ToolbarButton(symbol: "arrow.right.to.line", title: "贴完按 Tab",
+                                  tip: "开着时：每贴一条，MacKit 接着替你按一下 Tab，跳到下一个格子") { [weak self] in self?.toggleTab() }
+        let row = Theme.row([icon, label, tabButton, end], spacing: 8, insets: NSEdgeInsets(top: 5, left: 12, bottom: 5, right: 6))
         panel.contentView = Theme.bar(containing: row)
+        refreshTabButton()
+    }
+
+    func toggleTab() {
+        Settings.pasteQueueTab.toggle()
+        refreshTabButton()
+    }
+
+    func refreshTabButton() {
+        tabButton.isSelectedLook = Settings.pasteQueueTab
     }
 
     func update(_ text: String) {
@@ -220,6 +257,7 @@ final class PasteQueueBar {
     }
 
     func show() {
+        refreshTabButton()                                  // 设置窗口里可能改过
         place()
         panel.orderFrontRegardless()
     }
