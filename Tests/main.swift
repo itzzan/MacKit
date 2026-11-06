@@ -538,5 +538,35 @@ check(abs(tall.canvas.width / tall.canvas.height - 4.0 / 3.0) < 0.01 && tall.can
 check(BeautifyMath.layout(imageSize: CGSize(width: 800, height: 500), style: .standard) == beautyLayout
       && BeautifyStyle.standard.ratio == .original, "美化原样：和以前一模一样")
 
+// MARK: 录屏自动推近（台阶 21）
+check(MouseTrack.normalize(CGPoint(x: 150, y: 350), in: CGRect(x: 100, y: 100, width: 200, height: 400)) == CGPoint(x: 0.25, y: 0.375),
+      "鼠标位置换算：屏幕上的点 → 画面里的比例（左上原点）")
+check(AutoZoom.segments(clicks: [5, 1, 2.5, 9], maxGap: 2) == [1...2.5, 5...5, 9...9], "点击分段：两次不到 2 秒算一段")
+let zc = AutoZoomConfig()
+let zseg = AutoZoom.segments(clicks: [1, 2.5], maxGap: 2)
+check(AutoZoom.level(at: 0.6, segments: zseg, config: zc) == 0 && abs(AutoZoom.level(at: 0.95, segments: zseg, config: zc) - 0.5) < 1e-9
+      && AutoZoom.level(at: 1.2, segments: zseg, config: zc) == 1, "推近：点之前 0.3 秒开始推，半秒推到位")
+check(AutoZoom.level(at: 4.4, segments: zseg, config: zc) == 1 && abs(AutoZoom.level(at: 4.9, segments: zseg, config: zc) - 0.5) < 1e-9
+      && AutoZoom.level(at: 5.4, segments: zseg, config: zc) == 0, "一段里一直推着；最后一下 2 秒后开始拉回、0.8 秒拉完")
+check(AutoZoom.ease(0) == 0 && AutoZoom.ease(1) == 1 && AutoZoom.ease(0.5) == 0.5 && AutoZoom.ease(0.1) < 0.1, "推近拉回有缓动：开头结尾慢")
+check(AutoZoom.cropRect(center: CGPoint(x: 0.5, y: 0.5), scale: 2) == CGRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5)
+      && AutoZoom.cropRect(center: CGPoint(x: 0.95, y: 0.02), scale: 2) == CGRect(x: 0.5, y: 0, width: 0.5, height: 0.5)
+      && AutoZoom.cropRect(center: CGPoint(x: 3, y: -1), scale: 1) == CGRect(x: 0, y: 0, width: 1, height: 1),
+      "放大 2 倍留中间一半；靠边时整块留在画面里；鼠标跑出画面也不出界")
+let zsamples = [MouseTrack.Sample(t: 0, x: 0.2, y: 0.2), MouseTrack.Sample(t: 1, x: 0.8, y: 0.6)]
+check(AutoZoom.position(at: 0.5, samples: zsamples) == CGPoint(x: 0.5, y: 0.4) && AutoZoom.position(at: 9, samples: zsamples) == CGPoint(x: 0.8, y: 0.6),
+      "两次记录之间按直线补鼠标位置")
+var jitter: [MouseTrack.Sample] = []
+for i in 0...120 { jitter.append(.init(t: Double(i) / 60, x: 0.5 + (i % 2 == 0 ? 0.01 : -0.01), y: 0.5)) }
+let calm = AutoZoom.smoothedCenters(samples: jitter, duration: 2, step: 1.0 / 60, follow: 0.25)
+check(calm.dropFirst(30).prefix(60).allSatisfy { abs($0.x - 0.5) < 0.002 }, "镜头不跟鼠标的小抖动")
+let jump = [MouseTrack.Sample(t: 0, x: 0.1, y: 0.1), MouseTrack.Sample(t: 1, x: 0.1, y: 0.1), MouseTrack.Sample(t: 1.05, x: 0.9, y: 0.9),
+            MouseTrack.Sample(t: 4, x: 0.9, y: 0.9)]
+let zplan = AutoZoom.plan(MouseTrack(samples: jump, clicks: [1.6], duration: 4), config: zc)
+check(abs(zplan.center(at: 1.6).x - 0.9) < 0.05 && zplan.rect(at: 0.5) == CGRect(x: 0, y: 0, width: 1, height: 1)
+      && abs(zplan.rect(at: 2).width - 0.5) < 1e-9, "鼠标挪过去再点：点的那一刻镜头已经到了；没推的时候是全景，推到位是一半大")
+let trimmedTrack = MouseTrack(samples: jump, clicks: [1.6, 3.5], duration: 4).trimmed(from: 1, to: 3)
+check(trimmedTrack.clicks.count == 1 && abs(trimmedTrack.clicks[0] - 0.6) < 1e-9 && trimmedTrack.duration == 2 && trimmedTrack.samples.first?.t == 0, "剪掉开头结尾：鼠标记录跟着剪、时间从 0 算")
+
 print(failures == 0 ? "UNIT TESTS OK" : "UNIT TESTS FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)

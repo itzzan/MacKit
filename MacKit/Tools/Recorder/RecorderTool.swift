@@ -76,6 +76,8 @@ final class RecorderTool: ToolModule {
     /// 屏幕画笔（台阶 16）：开始录时就造好（它的小工具窗口要列进"不录"名单），⌃⇧D 只在录屏时注册
     private(set) var pen: ScreenPenSession?
     private var penHotKeyID: UInt32?
+    /// 录的时候记鼠标（台阶 21，录完能自动推近）。录单个窗口时不记：窗口会被拖来拖去，位置对不上
+    private(set) var mouseTracker: MouseTracker?
 
     func activate() { registerHotKey() }
 
@@ -258,6 +260,7 @@ final class RecorderTool: ToolModule {
             self.job = job
             _ = self.makeHUD(for: target, options: options)
             self.preparePen(for: target)
+            self.startMouseTracker(for: target)
             if options.showKeys {
                 let caster = KeyCaster()
                 var isFull = false
@@ -285,6 +288,17 @@ final class RecorderTool: ToolModule {
         h.show(near: target.globalFrame, on: Self.screen(containing: target.globalFrame), fullScreen: isFullScreen)
         hud = h
         return h
+    }
+
+    /// 记鼠标：只在真的在录的时候记，时间按"视频里的第几秒"（前面几段 + 这一段录了多久）
+    private func startMouseTracker(for target: RecordTarget) {
+        if case .window = target { return }
+        let tracker = MouseTracker(frame: target.globalFrame) { [weak self] in
+            guard let self, self.state == .recording, let job = self.job, let r = job.recorder, r.startedAt != nil else { return nil }
+            return job.recordedBefore + r.duration
+        }
+        tracker.start()
+        mouseTracker = tracker
     }
 
     /// 开始录新的一段（第一次开始、暂停后继续都走这里）
@@ -395,6 +409,8 @@ final class RecorderTool: ToolModule {
         let seconds = job.recordedBefore
         let error = job.lastError
         let parts = job.segments
+        let track = mouseTracker?.stop(duration: seconds)
+        mouseTracker = nil
         Task { @MainActor in
             let folder = Settings.recordFolder
             let output = folder.appendingPathComponent(RecordGeometry.fileName(for: Date()))
@@ -406,6 +422,7 @@ final class RecorderTool: ToolModule {
                     try await VideoTools.concatenate(parts, to: output)
                 }
                 try? FileManager.default.removeItem(at: job.tempDirectory)
+                if let track { MouseTrackStore.save(track, for: output) }
                 self.reset()
                 self.done(output, seconds: seconds, partCount: parts.count, error: error)
             } catch {
@@ -525,6 +542,8 @@ final class RecorderTool: ToolModule {
         hud = nil
         keyCaster?.stop()
         keyCaster = nil
+        _ = mouseTracker?.stop(duration: 0)              // 取消了：记的不要了
+        mouseTracker = nil
         hideCamera()
         if let job, job.recorder == nil, state != .stopping { try? FileManager.default.removeItem(at: job.tempDirectory) }
         job = nil
@@ -537,8 +556,8 @@ final class RecorderTool: ToolModule {
     // MARK: 预览、GIF
 
     func openPreview(_ url: URL) {
-        let p = RecordingPreviewWindow(url: url)
-        p.onGIF = { [weak self] u, range in self?.makeGIF(from: u, range: range) }
+        let p = RecordingPreviewWindow(url: url, track: MouseTrackStore.load(for: url))
+        p.onGIF = { [weak self] u, range, zoom in self?.makeGIF(from: u, range: range, zoom: zoom) }
         p.onClose = { [weak self] in
             self?.preview = nil
             if NSApp.isActive, NSApp.modalWindow == nil { NSApp.hide(nil) }
@@ -548,7 +567,7 @@ final class RecorderTool: ToolModule {
     }
 
     /// 存成 GIF：和视频放在一起、同名。超过 30 秒先问一句
-    func makeGIF(from url: URL, range: CMTimeRange?) {
+    func makeGIF(from url: URL, range: CMTimeRange?, zoom: AutoZoomPlan? = nil) {
         Task { @MainActor in
             var seconds = range?.duration.seconds ?? 0
             if range == nil { seconds = await VideoTools.duration(of: url) }
@@ -561,10 +580,10 @@ final class RecorderTool: ToolModule {
                 alert.addButton(withTitle: "算了")
                 guard alert.runModal() == .alertFirstButtonReturn else { return }
             }
-            let output = url.deletingPathExtension().appendingPathExtension("gif")
+            let output = zoom == nil ? url.deletingPathExtension().appendingPathExtension("gif") : VideoTools.zoomedURL(for: url, ext: "gif")
             Toast.show("正在存成 GIF…", seconds: 120)
             do {
-                let frames = try await VideoTools.makeGIF(from: url, range: range, to: output)
+                let frames = try await VideoTools.makeGIF(from: url, range: range, to: output, zoom: zoom)
                 let size = (try? FileManager.default.attributesOfItem(atPath: output.path)[.size] as? Int) ?? 0
                 let mb = String(format: "%.1f", Double(size) / 1_048_576)
                 Log.capture.notice("record: gif \(frames) frames, \(size) bytes")

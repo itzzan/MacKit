@@ -12,7 +12,7 @@ xcrun swiftc -swift-version 5 -target arm64-apple-macos15.0 -sdk "$(xcrun --show
   "$ROOT/MacKit/Tools/Clipboard/ClipboardText.swift" "$ROOT/MacKit/Tools/Recorder/RecordGeometry.swift" \
   "$ROOT/MacKit/Tools/Recorder/KeyFormatter.swift" "$ROOT/MacKit/Tools/Recognize/RecognizeMath.swift" \
   "$ROOT/MacKit/Tools/LongShot/ScrollStitcher.swift" "$ROOT/MacKit/Tools/Misc/SystemText.swift" \
-  "$ROOT/MacKit/Tools/Beautify/BeautifyMath.swift" \
+  "$ROOT/MacKit/Tools/Beautify/BeautifyMath.swift" "$ROOT/MacKit/Tools/Recorder/AutoZoom.swift" \
   "$ROOT/Tests/main.swift"
 "$OUT/GeometryTests"
 

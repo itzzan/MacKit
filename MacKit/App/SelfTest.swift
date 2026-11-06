@@ -56,6 +56,7 @@ enum SelfTest {
         testRecognize()
         testTranslateAndColors()
         testScreenPen(recorder: recorder)
+        testAutoZoom()
         testLongShot(menu: statusItem.menu)
         testMisc(menu: statusItem.menu, recorder: recorder)
         testTheme()
@@ -1861,6 +1862,156 @@ enum SelfTest {
         check(preview.buttons.keys.sorted() == ["delete", "gif", "reveal", "save", "trim"] && preview.trimRange != nil,
               "预览窗口：剪辑、保存、存成 GIF、在访达中显示、删掉")
         preview.window.close()
+    }
+
+    // MARK: 台阶 21 录屏自动推近（不真的录屏、不显示窗口、不弹提示；鼠标记录存在临时文件夹）
+
+    private static func testAutoZoom() {
+        // 1. 记鼠标：只在"在录"时记，点击只算录的那块里面的
+        var now: Double? = nil
+        let tracker = MouseTracker(frame: CGRect(x: 100, y: 100, width: 200, height: 100)) { now }
+        tracker.click(at: CGPoint(x: 150, y: 150))
+        check(tracker.track.samples.isEmpty && tracker.track.clicks.isEmpty, "还没开始录（或暂停中）：鼠标不记")
+        now = 1.0
+        tracker.sample(CGPoint(x: 150, y: 150))
+        tracker.click(at: CGPoint(x: 200, y: 175))
+        tracker.click(at: CGPoint(x: 500, y: 150))
+        let recorded = tracker.stop(duration: 3)
+        check(recorded.samples.first == .init(t: 1, x: 0.25, y: 0.5) && recorded.clicks == [1.0] && recorded.samples.count == 3
+              && recorded.duration == 3, "在录时：位置换成画面里的比例、点击记下时刻；点到录的那块外面不算")
+
+        // 2. 存鼠标记录：按视频文件名对上，只留最近几个
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("MacKitZoom-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let tracks = dir.appendingPathComponent("tracks")
+        let videos = (1...3).map { dir.appendingPathComponent("MacKit_录屏_\($0).mp4") }
+        for (i, v) in videos.enumerated() {
+            MouseTrackStore.save(recorded, for: v, in: tracks, keep: 2)
+            try? FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(Double(i - 3) * 60)],
+                                                   ofItemAtPath: MouseTrackStore.url(for: v, in: tracks).path)
+        }
+        MouseTrackStore.save(recorded, for: videos[2], in: tracks, keep: 2)
+        check(MouseTrackStore.load(for: videos[2], in: tracks) == recorded && MouseTrackStore.load(for: videos[1], in: tracks) != nil
+              && MouseTrackStore.load(for: videos[0], in: tracks) == nil, "鼠标记录按视频文件名存取，只留最近的（最老的删掉）")
+
+        // 3. 推近版视频：左上红、右上绿、左下蓝、右下白；在红的那块点了一下 → 推近后整个画面都是红的
+        let source = dir.appendingPathComponent("四色.mp4")
+        let size = CGSize(width: 320, height: 180)
+        guard awaitResult(timeout: 20, { () async -> Bool in
+            (try? await writeQuadrantVideo(to: source, seconds: 2, size: size)) != nil
+        }) == true else { check(false, "造一段四色的小视频"); return }
+        let samples = stride(from: 0.0, through: 2.0, by: 1.0 / 30).map { MouseTrack.Sample(t: $0, x: 0.25, y: 0.25) }
+        let track = MouseTrack(samples: samples, clicks: [0.5], duration: 2)
+        let plan = AutoZoom.plan(track, config: AutoZoomConfig())
+        func isRed(_ p: (r: Int, g: Int, b: Int)) -> Bool { p.r > 170 && p.g < 90 && p.b < 90 }
+        func isWhite(_ p: (r: Int, g: Int, b: Int)) -> Bool { p.r > 200 && p.g > 200 && p.b > 200 }
+        let zoomed = dir.appendingPathComponent("四色-推近.mp4")
+        let exported = awaitResult(timeout: 30) { () async -> Bool in
+            (try? await VideoTools.exportZoomed(source, plan: plan, range: nil, to: zoomed)) != nil
+        } == true
+        let before = awaitResult(timeout: 10) { await frame(of: zoomed, at: 0.05) } ?? nil
+        let during = awaitResult(timeout: 10) { await frame(of: zoomed, at: 1.2) } ?? nil
+        let length = awaitResult(timeout: 10) { await VideoTools.duration(of: zoomed) } ?? 0
+        if exported, let before, let during {
+            let w = before.width, h = before.height
+            check(w == 320 && h == 180 && abs(length - 2) < 0.15, "导出推近版：尺寸、时长和原视频一样（\(w)×\(h)，\(String(format: "%.2f", length)) 秒）")
+            check(isWhite(pixel(before, x: w - 6, y: h - 6)) && isRed(pixel(before, x: 6, y: 6)), "点之前：全景（右下角还是白的）")
+            check(isRed(pixel(during, x: w - 6, y: h - 6)) && isRed(pixel(during, x: w / 2, y: h / 2)),
+                  "点了以后：推近到点的地方，整个画面都是那块红的")
+        } else { check(false, "推近版导出、取帧") }
+
+        let trimmedZoom = dir.appendingPathComponent("四色-剪过-推近.mp4")
+        let range = CMTimeRange(start: CMTime(seconds: 0.6, preferredTimescale: 600), duration: CMTime(seconds: 1.2, preferredTimescale: 600))
+        _ = awaitResult(timeout: 30) { () async -> Bool in
+            (try? await VideoTools.exportZoomed(source, plan: plan, range: range, to: trimmedZoom)) != nil
+        }
+        let trimLength = awaitResult(timeout: 10) { await VideoTools.duration(of: trimmedZoom) } ?? 0
+        if let f = awaitResult(timeout: 10, { await frame(of: trimmedZoom, at: 0.5) }) ?? nil {
+            check(abs(trimLength - 1.2) < 0.15 && isRed(pixel(f, x: f.width - 6, y: f.height - 6)),
+                  "剪了头尾再推近：只留剪好的那段（\(String(format: "%.2f", trimLength)) 秒），推近的时刻还对得上")
+        } else { check(false, "剪过的推近版取帧") }
+
+        let gif = dir.appendingPathComponent("四色-推近.gif")
+        let frames = awaitResult(timeout: 30) { () async -> Int in
+            (try? await VideoTools.makeGIF(from: source, to: gif, maxWidth: 320, fps: 10, zoom: plan)) ?? 0
+        } ?? 0
+        if let src = CGImageSourceCreateWithURL(gif as CFURL, nil), frames >= 15,
+           let g0 = CGImageSourceCreateImageAtIndex(src, 0, nil), let g12 = CGImageSourceCreateImageAtIndex(src, 12, nil) {
+            check(isWhite(pixel(g0, x: g0.width - 6, y: g0.height - 6)) && isRed(pixel(g12, x: g12.width - 6, y: g12.height - 6)),
+                  "勾着推近存成 GIF：GIF 也是推近的")
+        } else { check(false, "推近的 GIF 存得出来") }
+
+        // 4. 预览窗口（只造不显示）
+        let w = RecordingPreviewWindow(url: source, track: track)
+        w.showsToast = false
+        defer { w.window.close() }
+        check(w.zoomBox.isEnabled && w.zoomPopup.itemTitles == ["1.5 倍", "2 倍", "2.5 倍"] && w.zoomPopup.titleOfSelectedItem == "2 倍"
+              && !w.zoomPopup.isEnabled, "预览窗口：多一个\u{201C}自动推近\u{201D}的勾，旁边能选 1.5 / 2 / 2.5 倍，默认 2 倍")
+        _ = awaitResult(timeout: 10) { await w.setZoom(true) }
+        check(w.isZoomOn && w.playerView.player?.currentItem?.videoComposition != nil && w.zoomPlan?.config.factor == 2 && w.zoomPopup.isEnabled,
+              "勾上：播放器马上换成推近的画面（播放就能看到）")
+        w.zoomPopup.selectItem(at: 2)
+        check(w.zoomPlan?.config.factor == 2.5, "换成 2.5 倍")
+        let saved1 = awaitResult(timeout: 30) { await w.saveZoomed() } ?? nil
+        let saved2 = awaitResult(timeout: 30) { await w.saveZoomed() } ?? nil
+        check(saved1?.lastPathComponent == "四色-推近 2.mp4" && saved2?.lastPathComponent == "四色-推近 3.mp4"
+              && FileManager.default.fileExists(atPath: source.path), "点保存：另存一份\u{201C}-推近\u{201D}（已经有了就加 2、3），原视频还在")
+        _ = awaitResult(timeout: 10) { await w.setZoom(false) }
+        check(!w.isZoomOn && w.playerView.player?.currentItem?.videoComposition == nil, "去掉勾：回到原样")
+        info("预览窗口下面那排按钮要 \(Int(w.barWidth)) 点宽，窗口最窄 \(Int(w.window.minSize.width)) 点")
+        check(w.window.minSize.width >= w.barWidth && w.barWidth > 520, "预览窗口不会比下面那排按钮还窄（竖着的视频也放得下）")
+        let old = RecordingPreviewWindow(url: source)
+        defer { old.window.close() }
+        check(!old.zoomBox.isEnabled && old.zoomBox.title.contains("没有鼠标记录"), "没有鼠标记录（录的单个窗口、以前录的）：\u{201C}自动推近\u{201D}灰着，写着原因")
+    }
+
+    /// 造一段四色的假视频：左上红、右上绿、左下蓝、右下白（H.264、没有声音）
+    nonisolated private static func writeQuadrantVideo(to url: URL, seconds: Double, size: CGSize) async throws {
+        try? FileManager.default.removeItem(at: url)
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: Int(size.width), AVVideoHeightKey: Int(size.height)])
+        input.expectsMediaDataInRealTime = false
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: Int(size.width), kCVPixelBufferHeightKey as String: Int(size.height)])
+        writer.add(input)
+        writer.startWriting()
+        writer.startSession(atSourceTime: .zero)
+        let fps = 30, w = Int(size.width), h = Int(size.height)
+        for i in 0..<Int(seconds * Double(fps)) {
+            while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(2)) }
+            guard let pool = adaptor.pixelBufferPool else { break }
+            var buffer: CVPixelBuffer?
+            CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
+            guard let pb = buffer else { continue }
+            CVPixelBufferLockBaseAddress(pb, [])
+            if let base = CVPixelBufferGetBaseAddress(pb) {
+                let row = CVPixelBufferGetBytesPerRow(pb)
+                let p = base.assumingMemoryBound(to: UInt8.self)
+                for y in 0..<h {
+                    for x in 0..<w {
+                        let left = x < w / 2, top = y < h / 2
+                        let (r, g, b): (UInt8, UInt8, UInt8) = top ? (left ? (255, 0, 0) : (0, 255, 0)) : (left ? (0, 0, 255) : (255, 255, 255))
+                        let o = y * row + x * 4
+                        p[o] = b; p[o + 1] = g; p[o + 2] = r; p[o + 3] = 255
+                    }
+                }
+            }
+            CVPixelBufferUnlockBaseAddress(pb, [])
+            adaptor.append(pb, withPresentationTime: CMTime(value: CMTimeValue(i), timescale: CMTimeScale(fps)))
+        }
+        input.markAsFinished()
+        await writer.finishWriting()
+        if writer.status != .completed { throw writer.error ?? VideoToolError.exportUnavailable }
+    }
+
+    /// 视频某一刻的画面
+    nonisolated private static func frame(of url: URL, at seconds: Double) async -> CGImage? {
+        let g = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        g.requestedTimeToleranceBefore = .zero
+        g.requestedTimeToleranceAfter = .zero
+        return try? await g.image(at: CMTime(seconds: seconds, preferredTimescale: 600)).image
     }
 
     // MARK: 录屏加料第二批：点击高亮、按键显示、摄像头。不打开摄像头、不监听按键、不改你的设置

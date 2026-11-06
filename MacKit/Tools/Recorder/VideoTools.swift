@@ -64,6 +64,49 @@ enum VideoTools {
         try await session.export(to: output, as: .mp4)
     }
 
+    // MARK: 自动推近（台阶 21）
+
+    /// 每一帧按算好的那一块裁剪、放大回原来的大小：预览窗口里实时播、导出、做 GIF 都用它
+    static func zoomComposition(for asset: AVAsset, plan: AutoZoomPlan) async throws -> AVVideoComposition {
+        try await AVMutableVideoComposition.videoComposition(with: asset) { request in
+            let source = request.sourceImage
+            let e = source.extent
+            let r = plan.rect(at: request.compositionTime.seconds)        // 比例，左上原点
+            guard r.width < 0.999 else { request.finish(with: source, context: nil); return }
+            let crop = CGRect(x: e.minX + r.minX * e.width, y: e.minY + (1 - r.maxY) * e.height,
+                              width: r.width * e.width, height: r.height * e.height)
+            let zoom = CGAffineTransform(translationX: -crop.minX, y: -crop.minY)
+                .concatenating(CGAffineTransform(scaleX: e.width / crop.width, y: e.height / crop.height))
+                .concatenating(CGAffineTransform(translationX: e.minX, y: e.minY))
+            request.finish(with: source.clampedToExtent().cropped(to: crop).transformed(by: zoom).cropped(to: e), context: nil)
+        }
+    }
+
+    /// 存一份推近版（range = 剪好的那段；声音原样带上）。原视频不动（拍板）
+    static func exportZoomed(_ url: URL, plan: AutoZoomPlan, range: CMTimeRange?, to output: URL) async throws {
+        let asset = AVURLAsset(url: url)
+        let composition = try await zoomComposition(for: asset, plan: plan)
+        try? FileManager.default.removeItem(at: output)
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
+            throw VideoToolError.exportUnavailable
+        }
+        session.videoComposition = composition
+        if let range { session.timeRange = range }
+        try await session.export(to: output, as: .mp4)
+    }
+
+    /// "原文件名-推近.mp4"；已经有了就加 2、3……
+    static func zoomedURL(for url: URL, ext: String = "mp4") -> URL {
+        let folder = url.deletingLastPathComponent(), base = url.deletingPathExtension().lastPathComponent + "-推近"
+        var candidate = folder.appendingPathComponent(base).appendingPathExtension(ext)
+        var n = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = folder.appendingPathComponent("\(base) \(n)").appendingPathExtension(ext)
+            n += 1
+        }
+        return candidate
+    }
+
     static func duration(of url: URL) async -> Double {
         (try? await AVURLAsset(url: url).load(.duration)).map(CMTimeGetSeconds) ?? 0
     }
@@ -71,7 +114,7 @@ enum VideoTools {
     /// 存成循环播放的 GIF：每秒 fps 帧，最宽 maxWidth 像素（只缩不放）。返回写了几帧
     @discardableResult
     static func makeGIF(from url: URL, range: CMTimeRange? = nil, to output: URL, maxWidth: CGFloat = 800, fps: Int = 10,
-                        progress: ((Double) -> Void)? = nil) async throws -> Int {
+                        zoom: AutoZoomPlan? = nil, progress: ((Double) -> Void)? = nil) async throws -> Int {
         let asset = AVURLAsset(url: url)
         let duration = try await asset.load(.duration)
         let r = range ?? CMTimeRange(start: .zero, duration: duration)
@@ -80,6 +123,7 @@ enum VideoTools {
 
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
+        if let zoom { generator.videoComposition = try await zoomComposition(for: asset, plan: zoom) }   // 勾着推近：GIF 也推近
         generator.maximumSize = CGSize(width: maxWidth, height: 100_000)
         let tolerance = CMTime(value: 1, timescale: CMTimeScale(fps * 2))
         generator.requestedTimeToleranceBefore = tolerance
