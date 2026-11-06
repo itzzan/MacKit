@@ -3,20 +3,38 @@ import Foundation
 
 // 截图美化的纯计算（台阶 13，有单元测试 Tests/main.swift）：留白多少、图放哪、圆角多大、背景用什么颜色
 
+/// 一个颜色（sRGB 0…1）
+struct BeautifyColor: Equatable {
+    var r: Double, g: Double, b: Double
+    var tuple: (Double, Double, Double) { (r, g, b) }
+    /// 第一次点"自选"时取色盘里的颜色
+    static let standard = BeautifyColor(r: 0.20, g: 0.47, b: 0.96)
+}
+
 /// 一种美化样式
 struct BeautifyStyle: Equatable {
     enum Background: Equatable {
         case preset(Int)     // 8 种渐变之一
         case auto            // 从截图里取主色配渐变
         case none            // 不要背景：四周透明，只要圆角和阴影
+        case solid(BeautifyColor)   // 自选的一个纯色（台阶 20）
     }
     enum Level: Int, CaseIterable { case small, medium, large }
     enum Corner: Int, CaseIterable { case none, small, large }
+    /// 整张图的比例（台阶 20）：原样 = 截图本来的比例加留白；别的四周补背景补到这个比例
+    enum Ratio: Int, CaseIterable {
+        case original, wide, standard, square
+        var title: String { ["原样", "16:9", "4:3", "1:1"][rawValue] }
+        var value: CGFloat? { [nil, 16.0 / 9.0, 4.0 / 3.0, 1.0][rawValue] }
+    }
 
     var background: Background = .preset(0)
     var padding: Level = .medium
     var corner: Corner = .small
     var shadow = true
+    var ratio: Ratio = .original
+    /// 上次自选的颜色（没在用自选背景时也记着，色块上显示它）
+    var custom = BeautifyColor.standard
 
     /// 第一次用：蓝紫渐变、中等留白、小圆角、有阴影
     static let standard = BeautifyStyle()
@@ -66,11 +84,19 @@ enum BeautifyMath {
         return min(r, min(size.width, size.height) / 4)
     }
 
-    /// 整张图多大、截图放在哪（点，左下原点）
+    /// 整张图多大、截图放在哪（点，左下原点）。选了比例时，先加留白，再往短的那边补齐到这个比例，截图在正中间
     static func layout(imageSize: CGSize, style: BeautifyStyle) -> (canvas: CGSize, image: CGRect) {
         let p = padding(for: imageSize, level: style.padding)
-        let canvas = CGSize(width: imageSize.width + p * 2, height: imageSize.height + p * 2)
-        return (canvas, CGRect(origin: CGPoint(x: p, y: p), size: imageSize))
+        var canvas = CGSize(width: imageSize.width + p * 2, height: imageSize.height + p * 2)
+        if let r = style.ratio.value, canvas.height > 0 {
+            if canvas.width / canvas.height < r {
+                canvas.width = (canvas.height * r).rounded()
+            } else {
+                canvas.height = (canvas.width / r).rounded()
+            }
+        }
+        let origin = CGPoint(x: ((canvas.width - imageSize.width) / 2).rounded(), y: ((canvas.height - imageSize.height) / 2).rounded())
+        return (canvas, CGRect(origin: origin, size: imageSize))
     }
 
     /// 阴影：模糊半径、往下偏多少（点）

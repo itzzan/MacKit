@@ -520,5 +520,23 @@ check(AppVersion.isNewer("v2.0.0", than: "1.5.1") && !AppVersion.isNewer("v1.0.0
       && AppVersion.isNewer("1.10.0", than: "1.9.9") && AppVersion.isNewer("2", than: "1.9") && AppVersion.parts("v1.2.3-beta") == [1, 2, 3],
       "版本号比较：v2.0.0 比 1.5.1 新，1.10 比 1.9 新，带 v 和后缀也认")
 
+// MARK: 截图加强（台阶 20）
+var wideStyle = BeautifyStyle.standard
+wideStyle.ratio = .wide
+let wide = BeautifyMath.layout(imageSize: CGSize(width: 800, height: 500), style: wideStyle)
+check(wide.canvas == CGSize(width: 1067, height: 600) && wide.image == CGRect(x: 134, y: 50, width: 800, height: 500),
+      "美化 16:9：截图加留白 900×600，往两边补到 1067×600，截图在正中间")
+var squareStyle = BeautifyStyle.standard
+squareStyle.ratio = .square
+let square = BeautifyMath.layout(imageSize: CGSize(width: 800, height: 500), style: squareStyle)
+check(square.canvas == CGSize(width: 900, height: 900) && square.image.origin == CGPoint(x: 50, y: 200), "美化 1:1：往上下补成 900×900")
+var tallStyle = BeautifyStyle.standard
+tallStyle.ratio = .standard
+let tall = BeautifyMath.layout(imageSize: CGSize(width: 400, height: 900), style: tallStyle)
+check(abs(tall.canvas.width / tall.canvas.height - 4.0 / 3.0) < 0.01 && tall.canvas.height == 980 && abs(tall.image.midX - tall.canvas.width / 2) <= 0.5,
+      "美化 4:3：竖着的截图往两边补，比例对、截图在正中间")
+check(BeautifyMath.layout(imageSize: CGSize(width: 800, height: 500), style: .standard) == beautyLayout
+      && BeautifyStyle.standard.ratio == .original, "美化原样：和以前一模一样")
+
 print(failures == 0 ? "UNIT TESTS OK" : "UNIT TESTS FAILED (\(failures))")
 exit(failures == 0 ? 0 : 1)

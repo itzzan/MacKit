@@ -109,6 +109,7 @@ scripts/smoke-pen.sh            # 屏幕画笔实录检查：真的录左上角�
 build/MacKit.app/Contents/MacOS/MacKit --style-preview 输出.png 标题 [左边一栏.png]   # 样张：把各个浮动条、按钮画进一张图（不弹窗口）
 build/MacKit.app/Contents/MacOS/MacKit --welcome-preview 输出.png [dark]   # 把欢迎窗口画成图（不弹窗口、不改设置）
 build/MacKit.app/Contents/MacOS/MacKit --settings-preview 前缀 [dark]       # 把设置窗口五页各画一张图；"输出.png readme" 画 README 那张
+build/MacKit.app/Contents/MacOS/MacKit --beautify-preview 输出.png [dark]  # 把美化窗口画成图（不弹窗口、不改设置）
 scripts/make-icon.sh            # 重画 App 图标（用代码画，打包成 MacKit/Resources/AppIcon.icns）
 scripts/release.sh              # 做发布用的安装包 build/release/MacKit-版本.dmg（临时签名，签名里不带个人信息）
 MACKIT_BUILDER=swiftc scripts/build.sh   # 装了 Xcode 也强制用命令行编译

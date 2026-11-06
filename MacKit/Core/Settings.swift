@@ -327,13 +327,18 @@ enum Settings {
     }
 
     /// 按 C 复制颜色：HEX（默认，#FF3B30）还是 RGB（255, 59, 48）
-    /// 截图美化上次用的样式（台阶 13）。背景：0–7 预设渐变、8 自动配色、9 不要背景
+    /// 截图美化上次用的样式（台阶 13）。背景：0–7 预设渐变、8 自动配色、9 不要背景、10 自选纯色（台阶 20）
     static var beautifyStyle: BeautifyStyle {
         get {
             var s = BeautifyStyle.standard
             if let bg = store.object(forKey: "beautify.background") as? Int {
                 s.background = bg == 8 ? .auto : bg == 9 ? .none : .preset(min(max(bg, 0), BeautifyMath.presets.count - 1))
             }
+            if let c = store.array(forKey: "beautify.custom") as? [Double], c.count == 3 {
+                s.custom = BeautifyColor(r: c[0], g: c[1], b: c[2])
+            }
+            if store.integer(forKey: "beautify.background") == 10 { s.background = .solid(s.custom) }
+            if let r = store.object(forKey: "beautify.ratio") as? Int, let ratio = BeautifyStyle.Ratio(rawValue: r) { s.ratio = ratio }
             if let p = store.object(forKey: "beautify.padding") as? Int, let level = BeautifyStyle.Level(rawValue: p) { s.padding = level }
             if let c = store.object(forKey: "beautify.corner") as? Int, let corner = BeautifyStyle.Corner(rawValue: c) { s.corner = corner }
             if let shadow = store.object(forKey: "beautify.shadow") as? Bool { s.shadow = shadow }
@@ -344,8 +349,11 @@ enum Settings {
             case .preset(let i): i
             case .auto: 8
             case .none: 9
+            case .solid: 10
             }
             store.set(bg, forKey: "beautify.background")
+            store.set([newValue.custom.r, newValue.custom.g, newValue.custom.b], forKey: "beautify.custom")
+            store.set(newValue.ratio.rawValue, forKey: "beautify.ratio")
             store.set(newValue.padding.rawValue, forKey: "beautify.padding")
             store.set(newValue.corner.rawValue, forKey: "beautify.corner")
             store.set(newValue.shadow, forKey: "beautify.shadow")

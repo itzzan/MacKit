@@ -117,6 +117,8 @@ final class PinAnnotationSession {
 @MainActor
 final class PinAnnotateView: NSView {
     weak var editor: AnnotationEditor?
+    /// 滚轮交给外面能滚的视图（长截图标注，台阶 20）；贴图上标注时不滚、不缩放
+    var passesScrollWheel = false
     private var drawing = false
     private var editing = false                 // 拖选中的标注（台阶 12）
     private var banding = false                 // ⇧ 在空白处拖：框选（台阶 19）
@@ -194,7 +196,7 @@ final class PinAnnotateView: NSView {
 
     // 标注时不拖动、不缩放、不弹右键菜单，免得画歪
     override func rightMouseDown(with event: NSEvent) {}
-    override func scrollWheel(with event: NSEvent) {}
+    override func scrollWheel(with event: NSEvent) { if passesScrollWheel { super.scrollWheel(with: event) } }
     override func magnify(with event: NSEvent) {}
 
     override func keyDown(with event: NSEvent) {

@@ -22,6 +22,7 @@ enum BeautifyRenderer {
         case .preset(let i): BeautifyMath.presets[min(max(i, 0), BeautifyMath.presets.count - 1)]
         case .auto: auto()
         case .none: nil
+        case .solid(let c): BeautifyGradient(name: "自选", from: c.tuple, to: c.tuple)
         }
     }
 
@@ -44,7 +45,7 @@ enum BeautifyRenderer {
         let radius = BeautifyMath.cornerRadius(for: pointSize, corner: style.corner)
         let path = CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
         if style.shadow {
-            let s = BeautifyMath.shadow(for: pointSize, padding: rect.minX)
+            let s = BeautifyMath.shadow(for: pointSize, padding: BeautifyMath.padding(for: pointSize, level: style.padding))
             ctx.saveGState()
             ctx.setShadow(offset: CGSize(width: 0, height: s.offset), blur: s.blur,
                           color: NSColor.black.withAlphaComponent(style.background == .none ? 0.45 : 0.35).cgColor)
@@ -75,6 +76,12 @@ final class BeautifyWindow: NSObject, NSWindowDelegate {
     let paddingControl = NSSegmentedControl(labels: ["小", "中", "大"], trackingMode: .selectOne, target: nil, action: nil)
     let cornerControl = NSSegmentedControl(labels: ["无", "小", "大"], trackingMode: .selectOne, target: nil, action: nil)
     let shadowBox = NSButton(checkboxWithTitle: "阴影", target: nil, action: nil)
+    let ratioControl = NSSegmentedControl(labels: BeautifyStyle.Ratio.allCases.map(\.title), trackingMode: .selectOne,
+                                          target: nil, action: nil)
+    /// 最后那个"自选"色块：点了打开系统的取色盘（台阶 20）
+    private(set) var customSwatch: BeautifySwatch!
+    /// 取色盘现在是不是在给这个窗口送颜色
+    private(set) var ownsColorPanel = false
     private(set) var buttons: [String: NSButton] = [:]
     private lazy var auto = BeautifyRenderer.autoGradient(of: source)
     /// 完成：复制 + 存（BeautifyTool 接上）
@@ -113,8 +120,12 @@ final class BeautifyWindow: NSObject, NSWindowDelegate {
                 self.setStyle(s)
             }
         }
-        let rows = stride(from: 0, to: swatches.count, by: 5).map { i -> NSStackView in
-            let row = NSStackView(views: Array(swatches[i..<min(i + 5, swatches.count)]))
+        customSwatch = BeautifySwatch(background: .solid(style.custom), auto: { BeautifyMath.presets[0] }) { [weak self] in
+            self?.pickCustomColor()
+        }
+        swatches.append(customSwatch)
+        let rows = stride(from: 0, to: swatches.count, by: 6).map { i -> NSStackView in
+            let row = NSStackView(views: Array(swatches[i..<min(i + 6, swatches.count)]))
             row.spacing = 8
             return row
         }
@@ -129,6 +140,8 @@ final class BeautifyWindow: NSObject, NSWindowDelegate {
         cornerControl.action = #selector(controlsChanged)
         shadowBox.target = self
         shadowBox.action = #selector(controlsChanged)
+        ratioControl.target = self
+        ratioControl.action = #selector(controlsChanged)
 
         func section(_ title: String, _ view: NSView) -> NSStackView {
             let label = NSTextField(labelWithString: title)
@@ -140,10 +153,10 @@ final class BeautifyWindow: NSObject, NSWindowDelegate {
             s.spacing = 6
             return s
         }
-        let hint = NSTextField(labelWithString: "自动 = 跟着截图的主色；无 = 四周透明")
+        let hint = NSTextField(labelWithString: "自动 = 跟着截图的主色；无 = 四周透明；最后一个 = 自己挑颜色")
         hint.font = Theme.small()
         hint.textColor = .tertiaryLabelColor
-        let controls = NSStackView(views: [section("背景", grid), hint, section("留白", paddingControl),
+        let controls = NSStackView(views: [section("背景", grid), hint, section("比例", ratioControl), section("留白", paddingControl),
                                            section("圆角", cornerControl), shadowBox])
         controls.orientation = .vertical
         controls.alignment = .leading
@@ -188,11 +201,39 @@ final class BeautifyWindow: NSObject, NSWindowDelegate {
         s.padding = BeautifyStyle.Level(rawValue: paddingControl.selectedSegment) ?? .medium
         s.corner = BeautifyStyle.Corner(rawValue: cornerControl.selectedSegment) ?? .small
         s.shadow = shadowBox.state == .on
+        s.ratio = BeautifyStyle.Ratio(rawValue: ratioControl.selectedSegment) ?? .original
+        setStyle(s)
+    }
+
+    /// 点"自选"：先换成上次自选的颜色，再打开系统的取色盘接着挑
+    func pickCustomColor() {
+        applyCustomColor(style.custom)
+        let panel = NSColorPanel.shared
+        panel.showsAlpha = false
+        panel.color = NSColor(srgbRed: style.custom.r, green: style.custom.g, blue: style.custom.b, alpha: 1)
+        panel.setTarget(self)
+        panel.setAction(#selector(colorPanelChanged(_:)))
+        ownsColorPanel = true
+        panel.orderFront(nil)
+    }
+
+    @objc func colorPanelChanged(_ sender: NSColorPanel) {
+        guard let c = sender.color.usingColorSpace(.sRGB) else { return }
+        applyCustomColor(BeautifyColor(r: Double(c.redComponent), g: Double(c.greenComponent), b: Double(c.blueComponent)))
+    }
+
+    /// 背景换成这个纯色，并记成"上次自选的颜色"
+    func applyCustomColor(_ c: BeautifyColor) {
+        var s = style
+        s.custom = c
+        s.background = .solid(c)
         setStyle(s)
     }
 
     private func refresh() {
+        customSwatch.background = .solid(style.custom)
         for swatch in swatches { swatch.isSelectedLook = swatch.background == style.background }
+        ratioControl.selectedSegment = style.ratio.rawValue
         paddingControl.selectedSegment = style.padding.rawValue
         cornerControl.selectedSegment = style.corner.rawValue
         shadowBox.state = style.shadow ? .on : .off
@@ -230,19 +271,31 @@ final class BeautifyWindow: NSObject, NSWindowDelegate {
     private func close() {
         window.delegate = nil
         window.orderOut(nil)
+        releaseColorPanel()
         onClose?()
     }
 
     func windowWillClose(_ notification: Notification) {
         window.delegate = nil
+        releaseColorPanel()
         onClose?()
+    }
+
+    /// 关美化窗口时取色盘也收起，不再往这里送颜色
+    private func releaseColorPanel() {
+        guard ownsColorPanel, NSColorPanel.sharedColorPanelExists else { return }
+        ownsColorPanel = false
+        NSColorPanel.shared.setTarget(nil)
+        NSColorPanel.shared.setAction(nil)
+        NSColorPanel.shared.orderOut(nil)
     }
 }
 
 /// 背景色块：渐变 / 自动 / 无（棋盘格），选中时外面一圈主题色
 @MainActor
 final class BeautifySwatch: NSButton {
-    let background: BeautifyStyle.Background
+    /// "自选"色块要跟着上次挑的颜色变，所以能改
+    var background: BeautifyStyle.Background { didSet { if background != oldValue { needsDisplay = true } } }
     private let autoGradient: () -> BeautifyGradient
     private let handler: () -> Void
     var isSelectedLook = false { didSet { needsDisplay = true } }
@@ -260,6 +313,7 @@ final class BeautifySwatch: NSButton {
         case .preset(let i): BeautifyMath.presets[i].name
         case .auto: "自动配色（跟着截图的主色）"
         case .none: "不要背景（四周透明）"
+        case .solid: "自选颜色（点了打开取色盘）"
         }
         translatesAutoresizingMaskIntoConstraints = false
         widthAnchor.constraint(equalToConstant: 34).isActive = true
@@ -295,6 +349,10 @@ final class BeautifySwatch: NSButton {
         if background == .auto, let star = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 12, weight: .bold).applying(.init(paletteColors: [.white]))) {
             star.draw(in: CGRect(x: box.midX - 7, y: box.midY - 7, width: 14, height: 14))
+        }
+        if case .solid = background, let drop = NSImage(systemSymbolName: "eyedropper", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .bold).applying(.init(paletteColors: [.white]))) {
+            drop.draw(in: CGRect(x: box.midX - 7, y: box.midY - 7, width: 14, height: 14))      // 取色笔：一看就知道能自己挑
         }
         ctx.addPath(CGPath(roundedRect: box, cornerWidth: 6, cornerHeight: 6, transform: nil))
         ctx.setStrokeColor(NSColor.separatorColor.cgColor)

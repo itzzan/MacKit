@@ -71,6 +71,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             StylePreview.runWelcome(arguments: CommandLine.arguments)
             return
         }
+        if CommandLine.arguments.contains("--beautify-preview") {
+            StylePreview.runBeautify(arguments: CommandLine.arguments)
+            return
+        }
         if CommandLine.arguments.contains("--settings-preview") {
             StylePreview.runSettings(arguments: CommandLine.arguments)
             return

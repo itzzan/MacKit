@@ -24,6 +24,31 @@ enum StylePreview {
         exit(0)
     }
 
+    /// 美化窗口画成图（不弹窗口、不改设置）：--beautify-preview 输出.png [dark]。用一张自己画的假截图，选 16:9
+    static func runBeautify(arguments: [String]) {
+        guard let i = arguments.firstIndex(of: "--beautify-preview"), arguments.indices.contains(i + 1) else { exit(2) }
+        let dark = arguments.contains("dark")
+        guard let ctx = CGContext(data: nil, width: 800, height: 500, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { exit(1) }
+        ctx.setFillColor(CGColor(srgbRed: 0.97, green: 0.97, blue: 0.98, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: 800, height: 500))
+        ctx.setFillColor(CGColor(srgbRed: 0.20, green: 0.47, blue: 0.96, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 440, width: 800, height: 60))
+        ctx.setFillColor(CGColor(srgbRed: 0.85, green: 0.86, blue: 0.88, alpha: 1))
+        for row in 0..<6 { ctx.fill(CGRect(x: 60, y: 360 - row * 60, width: row % 2 == 0 ? 600 : 420, height: 22)) }
+        guard let shot = ctx.makeImage() else { exit(1) }
+        var style = BeautifyStyle.standard
+        style.ratio = .wide
+        let w = BeautifyWindow(image: shot, pointSize: CGSize(width: 400, height: 250), style: style)
+        guard let content = w.window.contentView,
+              let out = renderView(content, dark: dark, background: dark ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 0.93, alpha: 1),
+                                   fit: false),
+              write(out, to: arguments[i + 1]) else { exit(1) }
+        print("美化窗口：\(arguments[i + 1])　\(out.width)×\(out.height)")
+        exit(0)
+    }
+
     /// 设置窗口画成图（不弹窗口、不改设置）：
     ///   --settings-preview 输出前缀 [dark]         → 五页各一张：前缀-通用.png …
     ///   --settings-preview 输出.png readme [dark]  → README 用的一张：上面一排分页（照着系统样子画的）+ 快捷键页

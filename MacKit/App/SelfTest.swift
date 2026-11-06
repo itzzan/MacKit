@@ -43,6 +43,7 @@ enum SelfTest {
         testSelectEdit()
         testMultiSelect()
         testGroupDragFixes()
+        testScreenshotPlus()
         testBeautify()
         testPinTransforms()
         testTextEditing()
@@ -373,14 +374,19 @@ enum SelfTest {
         view.mouseUp(with: mouse(.leftMouseUp, 400, 450))
         check(editor.document.items.count == 1 && editor.document.items[0].box == CGRect(x: 300, y: 350, width: 100, height: 100),
               "画了一个矩形")
-        check(!editor.canAdjustSelection, "画了第一笔，框就固定了")
+        check(!editor.canAdjustSelection && editor.canResizeSelection, "画了第一笔：框不能整个挪了，但边和角还能拖（台阶 20）")
 
         view.keyDown(with: key("r", code: 15))
         check(editor.tool == nil, "再按一次 R 放下工具")
         view.mouseDown(with: mouse(.leftMouseDown, fixed.maxX, fixed.minY))
         view.mouseDragged(with: mouse(.leftMouseDragged, fixed.maxX + 100, fixed.minY - 50))
         view.mouseUp(with: mouse(.leftMouseUp, fixed.maxX + 100, fixed.minY - 50))
-        check(view.currentSelection == fixed, "框固定后拖小方块也不会变")
+        check(view.currentSelection == CGRect(x: fixed.minX, y: fixed.minY - 50, width: fixed.width + 100, height: fixed.height + 50),
+              "画了以后拖右下角的小方块：框跟着变大（台阶 20 起；以前是锁死的）")
+        view.mouseDown(with: mouse(.leftMouseDown, fixed.maxX + 100, fixed.minY - 50))
+        view.mouseDragged(with: mouse(.leftMouseDragged, fixed.maxX, fixed.minY))
+        view.mouseUp(with: mouse(.leftMouseUp, fixed.maxX, fixed.minY))
+        check(view.currentSelection == fixed, "再拖回去：框回到原样")
 
         _ = view.performKeyEquivalent(with: key("z", code: 6, mods: .command))
         check(editor.document.items.isEmpty, "⌘Z 撤销")
@@ -643,6 +649,132 @@ enum SelfTest {
               "拿着框工具时在选着的框中间按下：照旧画一个新的（框里起笔画箭头这类不受影响）")
     }
 
+    // MARK: 台阶 20 截图加强
+
+    private static func testScreenshotPlus() {
+        // 1. 画了以后还能拖边和角
+        let viewSize = CGSize(width: 1512, height: 982)
+        let image = makeTestImage(width: 3024, height: 1964)
+        let container = NSView(frame: CGRect(origin: .zero, size: viewSize))
+        let view = SelectionView(frame: container.bounds, image: image, windowRects: [], scale: 2)
+        container.addSubview(view)
+        let mosaicSource = MosaicSource(image: image, viewSize: viewSize)
+        let editor = AnnotationEditor(container: container, mosaic: mosaicSource)
+        defer { editor.tearDown() }
+        view.beginEditing(editor, selection: CGRect(x: 100, y: 100, width: 800, height: 600))
+        editor.setColor(.red)
+        editor.setSize(.thick)
+        func drag(_ from: CGPoint, _ to: CGPoint) {
+            view.mouseDown(with: mouse(.leftMouseDown, from.x, from.y))
+            view.mouseDragged(with: mouse(.leftMouseDragged, (from.x + to.x) / 2, (from.y + to.y) / 2))
+            view.mouseDragged(with: mouse(.leftMouseDragged, to.x, to.y))
+            view.mouseUp(with: mouse(.leftMouseUp, to.x, to.y))
+        }
+        view.keyDown(with: key("a", code: 0))
+        drag(CGPoint(x: 200, y: 400), CGPoint(x: 600, y: 400))
+        let arrow = editor.document.items.first
+        check(editor.document.items.count == 1 && editor.canResizeSelection && !editor.canAdjustSelection,
+              "画了一个箭头：框还能改大小，但不能整个挪")
+        drag(CGPoint(x: 900, y: 100), CGPoint(x: 1000, y: 50))
+        check(view.currentSelection == CGRect(x: 100, y: 50, width: 900, height: 650) && editor.document.items.first == arrow
+              && editor.selection == view.currentSelection, "画了以后拖右下角：框拉大，箭头留在原处")
+        drag(CGPoint(x: 1000, y: 375), CGPoint(x: 400, y: 375))
+        check(view.currentSelection == CGRect(x: 100, y: 50, width: 300, height: 650), "拖右边中间的小方块：框缩小到箭头一半")
+        if let sel = view.currentSelection,
+           let out = AnnotationExporter.export(image: image, viewSize: viewSize, selection: sel, screenOrigin: .zero,
+                                               annotations: editor.document.items, mosaic: mosaicSource) {
+            let onArrow = pixel(out.image, x: 400, y: (700 - 400) * 2)        // 箭头在框里那半截上
+            check(out.image.width == 600 && out.image.height == 1300 && onArrow.r > 200 && onArrow.g < 90,
+                  "完成：图只有框里那块（\(out.image.width)×\(out.image.height) 像素），框里那半截箭头在图上")
+        } else { check(false, "改了框以后能导出") }
+        editor.selectTool(nil)
+        let before = view.currentSelection
+        drag(CGPoint(x: 250, y: 600), CGPoint(x: 300, y: 650))
+        check(view.currentSelection == before, "画了以后在框里空白处拖：框不会整个挪走（拍板）")
+        editor.undo()
+        check(editor.document.items.isEmpty && view.currentSelection == before, "⌘Z 撤回的是箭头，框不变（改框不算进撤销）")
+
+        // 2. 美化：比例、自选颜色（不显示窗口；改的样式测完换回去）
+        let keys = ["beautify.background", "beautify.padding", "beautify.corner", "beautify.shadow", "beautify.custom", "beautify.ratio"]
+        let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
+        defer { for (k, v) in zip(keys, saved) { if let v { UserDefaults.standard.set(v, forKey: k) } else { UserDefaults.standard.removeObject(forKey: k) } } }
+        let shot = makeTestImage(width: 400, height: 300)
+        let w = BeautifyWindow(image: shot, pointSize: CGSize(width: 200, height: 150), style: .standard)
+        check(w.ratioControl.segmentCount == 4 && w.ratioControl.label(forSegment: 1) == "16:9" && w.swatches.count == 11
+              && w.customSwatch.toolTip?.hasPrefix("自选") == true, "美化窗口：多一排比例（原样 16:9 4:3 1:1），背景最后多一个\u{201C}自选\u{201D}")
+        w.ratioControl.selectedSegment = 1
+        w.controlsChanged()
+        if let r = w.result() {
+            check(abs(r.pointSize.width / r.pointSize.height - 16.0 / 9.0) < 0.01 && Settings.beautifyStyle.ratio == .wide,
+                  "选 16:9：成品是 16:9（\(Int(r.pointSize.width))×\(Int(r.pointSize.height)) 点），记住了")
+        } else { check(false, "美化 16:9 画得出来") }
+        let red = BeautifyColor(r: 1, g: 0, b: 0)
+        w.applyCustomColor(red)
+        if let r = w.result() {
+            let corner = pixel(r.image, x: 2, y: 2)
+            check(w.style.background == .solid(red) && w.customSwatch.isSelectedLook && corner.r > 240 && corner.g < 20 && corner.b < 20
+                  && !w.ownsColorPanel, "自选一个红色：背景变成纯红，\u{201C}自选\u{201D}色块选着（自检不打开取色盘）")
+        } else { check(false, "自选颜色画得出来") }
+        let again = BeautifyWindow(image: shot, pointSize: CGSize(width: 200, height: 150), style: Settings.beautifyStyle)
+        check(again.style.ratio == .wide && again.style.background == .solid(red) && again.style.custom == red,
+              "关掉再美化一张：还是 16:9、还是那个红色")
+        var other = again.style
+        other.background = .preset(2)
+        again.setStyle(other)
+        check(Settings.beautifyStyle.custom == red && again.customSwatch.background == .solid(red), "换成别的背景后，自选的颜色还记着")
+
+        // 3. 长截图上标注（不显示；用私有剪贴板、临时文件夹）
+        let tallPixels = CGSize(width: 600, height: 6000)
+        guard let tallCtx = CGContext(data: nil, width: Int(tallPixels.width), height: Int(tallPixels.height), bitsPerComponent: 8,
+                                      bytesPerRow: 0, space: sRGB, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        tallCtx.setFillColor(CGColor(srgbRed: 0.85, green: 0.85, blue: 0.85, alpha: 1))
+        tallCtx.fill(CGRect(origin: .zero, size: tallPixels))
+        guard let tall = tallCtx.makeImage() else { return }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("MacKitLongAnnotate-\(UUID().uuidString)")
+        let pb = NSPasteboard(name: NSPasteboard.Name("local.mackit.selftest.longannotate.\(UUID().uuidString)"))
+        defer { try? FileManager.default.removeItem(at: dir); pb.releaseGlobally() }
+        let tool = LongShotTool()
+        tool.showsToast = false
+        let la = tool.annotate(tall, pointSize: NSSize(width: 300, height: 3000), present: false, pasteboard: pb, folder: dir)
+        check(!la.window.isVisible && la.editor.toolbar.mode == .pin && la.input.passesScrollWheel
+              && la.scrollView.documentView?.frame.size == CGSize(width: 300, height: 3000)
+              && abs(la.visibleRect.maxY - 3000) < 1 && la.scrollView.hasVerticalScroller,
+              "长截图提示条点\u{201C}标注\u{201D}：长图放进能上下滚的窗口，从最上面开始看，滚轮交给窗口滚")
+        la.editor.setColor(.red)
+        la.editor.setSize(.thick)
+        la.editor.selectTool(.rect)
+        la.editor.mouseDown(at: CGPoint(x: 50, y: 100)); la.editor.mouseDragged(to: CGPoint(x: 150, y: 150))
+        la.editor.mouseUp(at: CGPoint(x: 200, y: 200))
+        la.editor.mouseDown(at: CGPoint(x: 60, y: 2800)); la.editor.mouseUp(at: CGPoint(x: 160, y: 2900))
+        _ = la.input.performKeyEquivalent(with: key("a", code: 0, mods: .command))
+        _ = la.input.performKeyEquivalent(with: key("d", code: 2, mods: .command))
+        check(la.editor.document.items.count == 4, "长截图标注里也能 ⌘A 全选、⌘D 复制（台阶 19 那一套）")
+        _ = la.input.performKeyEquivalent(with: key("z", code: 6, mods: .command))
+        la.editor.selectTool(.mosaic)
+        la.editor.mouseDown(at: CGPoint(x: 20, y: 1500)); la.editor.mouseUp(at: CGPoint(x: 280, y: 1600))
+        let started = Date()
+        let annotated = la.result()
+        info("长截图（600×6000 像素）带马赛克导出一次 \(Int(Date().timeIntervalSince(started) * 1000)) 毫秒")
+        if let annotated {
+            let edge = pixel(annotated.image, x: 100, y: (3000 - 150) * 2)
+            check(annotated.image.width == 600 && annotated.image.height == 6000 && edge.r > 200 && edge.g < 90,
+                  "导出：还是原图大小（600×6000 像素），最下面画的框在图上")
+        } else { check(false, "长截图标注能导出") }
+        la.finish()
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        check(!la.window.isVisible && files.count == 1 && tool.lastAnnotatedURL?.deletingLastPathComponent().path == dir.path
+              && pb.data(forType: .png) != nil && tool.annotateWindow == nil,
+              "点完成：带标注的复制了、另存了一张新的，窗口关掉")
+        let second = tool.annotate(tall, pointSize: NSSize(width: 300, height: 3000), present: false, pasteboard: pb, folder: dir)
+        second.editor.selectTool(.rect)
+        second.editor.mouseDown(at: CGPoint(x: 50, y: 100)); second.editor.mouseUp(at: CGPoint(x: 200, y: 200))
+        second.input.keyDown(with: key("\u{1b}", code: 53))
+        check(second.editor.hasSelection == false && tool.annotateWindow === second, "刚画完的选着：第一下 Esc 只取消选中")
+        second.input.keyDown(with: key("\u{1b}", code: 53))
+        let after = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        check(tool.annotateWindow == nil && after.count == 1, "再按 Esc：不要这次画的，不多存文件")
+    }
+
     private static func testSelectEdit() {
         let viewSize = CGSize(width: 1512, height: 982)
         let image = makeTestImage(width: 3024, height: 1964)
@@ -748,7 +880,7 @@ enum SelfTest {
         let image = makeTestImage(width: 400, height: 300)
         let size = CGSize(width: 200, height: 150)
         // 美化窗口会记住样式：先存下你的设置，测完原样放回去
-        let keys = ["beautify.background", "beautify.padding", "beautify.corner", "beautify.shadow"]
+        let keys = ["beautify.background", "beautify.padding", "beautify.corner", "beautify.shadow", "beautify.custom", "beautify.ratio"]
         let saved = keys.map { UserDefaults.standard.object(forKey: $0) }
         defer { for (k, v) in zip(keys, saved) { if let v { UserDefaults.standard.set(v, forKey: k) } else { UserDefaults.standard.removeObject(forKey: k) } } }
 
@@ -773,7 +905,8 @@ enum SelfTest {
         }
 
         let w = BeautifyWindow(image: image, pointSize: size, style: .standard)
-        check(w.preview.image != nil && w.swatches.count == 10 && w.swatches[0].isSelectedLook, "美化窗口：有预览、8 种渐变 + 自动 + 无，默认选中蓝紫")
+        check(w.preview.image != nil && w.swatches.count == 11 && w.swatches[0].isSelectedLook,
+              "美化窗口：有预览、8 种渐变 + 自动 + 无 + 自选，默认选中蓝紫")
         w.swatches[9].performClick(nil)
         check(w.style.background == .none && Settings.beautifyStyle.background == .none && w.swatches[9].isSelectedLook,
               "点\u{201C}无\u{201D}：换成不要背景，并记住")

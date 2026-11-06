@@ -51,8 +51,10 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
         }
     }
 
-    /// 画了第一笔之后选区就固定，免得标注和框错位
+    /// 整个框挪动：只在画第一笔之前（台阶 20 拍板：画好以后在框里拖多半是想拖标注、画新的，整框挪动容易误碰）
     var canAdjustSelection: Bool { document.items.isEmpty && textView == nil && pending == nil }
+    /// 拖边和角改框的大小：画了以后也行（台阶 20）。标注记在整块屏幕上、完成时才按框裁，框变了标注不用动
+    var canResizeSelection: Bool { textView == nil && pending == nil }
     var isEditingText: Bool { textView != nil }
 
     /// 有变化时通知选区视图刷新（小方块要不要显示等）

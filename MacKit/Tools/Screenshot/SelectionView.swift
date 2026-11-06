@@ -246,7 +246,7 @@ final class SelectionView: NSView {
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
 
-        let showHandles = mode == .editing && (editor?.canAdjustSelection ?? false)
+        let showHandles = mode == .editing && (editor?.canResizeSelection ?? false)
         guard let sel = selection else {
             dimLayer.path = CGPath(rect: bounds, transform: nil)
             borderLayer.isHidden = true
@@ -306,7 +306,7 @@ final class SelectionView: NSView {
             guard let editor, let sel = selection else { return .arrow }
             if editor.toolbar.frame.contains(p) { return .arrow }            // 工具栏上用普通箭头
             if let tv = editor.textView, tv.frame.contains(p) { return .iBeam }
-            if editor.canAdjustSelection, let h = EditGeometry.handle(at: p, in: sel) {
+            if editor.canResizeSelection, let h = EditGeometry.handle(at: p, in: sel) {
                 return NSCursor.frameResize(position: Self.cursorPosition(h), directions: .all)
             }
             if let c = editor.editCursor(at: p) { return c }                // 画好的东西上：小手；选中那个的小方块：拉伸
@@ -385,8 +385,8 @@ final class SelectionView: NSView {
             } else if event.clickCount >= 2, editor.tool == nil, sel.contains(p), editor.hitIndex(at: p) == nil {
                 drag = .none
                 onDone?()                                            // 没选工具时双击框里空白处 = 完成
-            } else if editor.canAdjustSelection, let h = EditGeometry.handle(at: p, in: sel) {
-                drag = .resize(h, original: sel)
+            } else if editor.canResizeSelection, let h = EditGeometry.handle(at: p, in: sel) {
+                drag = .resize(h, original: sel)                     // 画了以后也能拖边和角（台阶 20）
             } else if event.modifierFlags.contains(.shift), !editor.document.items.isEmpty {
                 // ⇧ 点画好的东西 = 加选 / 去掉；⇧ 在空白处拖 = 框选（台阶 19）
                 if editor.beginShiftPress(at: p) { drag = .edit } else { editor.beginBand(at: p); drag = .band }

@@ -240,6 +240,10 @@ final class LongShotTool: ToolModule {
     /// 提示里点"钉成贴图"：交给贴图积木（AppDelegate 里接上）
     var onPin: ((CGImage, NSSize) -> Void)?
     private(set) var session: LongShotSession?
+    /// 长截图上标注的窗口（台阶 20）
+    private(set) var annotateWindow: LongShotAnnotateWindow?
+    /// 自检时 false：标完不弹提示条
+    var showsToast = true
 
     func activate() {}
 
@@ -271,9 +275,41 @@ final class LongShotTool: ToolModule {
         let size = out.pointSize
         var actions: [(title: String, run: @MainActor () -> Void)] = []
         if let url = out.url { actions.append(("打开看看", { NSWorkspace.shared.open(url) })) }
+        actions.append(("标注", { [weak self] in self?.annotate(image, pointSize: size) }))         // 台阶 20：点了才打开（拍板）
         actions.append(("钉成贴图", { [weak self] in self?.onPin?(image, size) }))
         let saved = out.url != nil ? "并保存" : "，但保存失败：\(out.saveError ?? "")"
         Toast.showActions("✓ 长截图已复制\(saved)　\(image.width)×\(image.height)", actions: actions)
+    }
+
+    /// 打开长截图标注窗口；present = false 只给自检用（不显示）
+    @discardableResult
+    func annotate(_ image: CGImage, pointSize: NSSize, present: Bool = true,
+                  pasteboard: NSPasteboard = .general, folder: URL? = nil) -> LongShotAnnotateWindow {
+        annotateWindow?.window.close()
+        let w = LongShotAnnotateWindow(image: image, pointSize: pointSize)
+        w.onDone = { [weak self] annotated, size in
+            self?.deliverAnnotated(annotated, size: size, pasteboard: pasteboard, folder: folder ?? Settings.saveFolder)
+        }
+        w.onClose = { [weak self, weak w] in if self?.annotateWindow === w { self?.annotateWindow = nil } }
+        annotateWindow = w
+        Log.capture.notice("long shot annotate \(image.width)x\(image.height)")
+        if present { w.show() }
+        return w
+    }
+
+    /// 标完：复制带标注的那张，另存一张新的 PNG（原来那张留着，拍板）
+    private(set) var lastAnnotatedURL: URL?
+
+    private func deliverAnnotated(_ image: CGImage, size: CGSize, pasteboard: NSPasteboard, folder: URL) {
+        let scale = CGFloat(image.width) / max(size.width, 1)
+        guard let out = Self.output(image, scale: scale, pasteboard: pasteboard, folder: folder) else {
+            if showsToast { Toast.show("长截图标注失败：图片编码出错") }
+            return
+        }
+        lastAnnotatedURL = out.url
+        guard showsToast else { return }
+        Toast.show(out.url != nil ? "✓ 标好了：已复制，另存了一张新的（原来那张还在）" : "✓ 标好了：已复制（保存失败：\(out.saveError ?? "")）",
+                   seconds: 3)
     }
 
     struct Output {
