@@ -119,6 +119,7 @@ final class PinAnnotateView: NSView {
     weak var editor: AnnotationEditor?
     private var drawing = false
     private var editing = false                 // 拖选中的标注（台阶 12）
+    private var banding = false                 // ⇧ 在空白处拖：框选（台阶 19）
     private var tracking: NSTrackingArea?
 
     override var acceptsFirstResponder: Bool { true }
@@ -150,11 +151,16 @@ final class PinAnnotateView: NSView {
         let p = convert(event.locationInWindow, from: nil)
         drawing = false
         editing = false
+        banding = false
         if editor.isEditingText {                                    // 点别处 = 打完字
             editor.commitText()
         } else if event.clickCount >= 2, editor.document.textIndex(at: p) != nil {
             editor.editText(at: p)                                   // 双击文字 = 接着改
-        } else if !(editor.tool == .text && editor.document.textIndex(at: p) != nil), editor.beginEdit(at: p) {
+        } else if event.modifierFlags.contains(.shift), !editor.document.items.isEmpty {
+            // ⇧ 点画好的东西 = 加选 / 去掉；⇧ 在空白处拖 = 框选（台阶 19）
+            if editor.beginShiftPress(at: p) { editing = true } else { editor.beginBand(at: p); banding = true }
+        } else if !(editor.tool == .text && editor.document.textIndex(at: p) != nil),
+                  editor.beginEdit(at: p, duplicate: event.modifierFlags.contains(.option)) {
             editing = true                                           // 点中画好的东西：选中它，拖它
         } else if let tool = editor.tool, bounds.contains(p) {
             editor.mouseDown(at: p)
@@ -167,7 +173,7 @@ final class PinAnnotateView: NSView {
     override func mouseDragged(with event: NSEvent) {
         guard let editor else { return }
         let p = convert(event.locationInWindow, from: nil)
-        if editing { editor.dragEdit(to: p) } else if drawing { editor.mouseDragged(to: p) }
+        if editing { editor.dragEdit(to: p) } else if banding { editor.dragBand(to: p) } else if drawing { editor.mouseDragged(to: p) }
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -177,6 +183,9 @@ final class PinAnnotateView: NSView {
             editing = false
             editor.endEdit(at: p)
             cursor(at: p).set()
+        } else if banding {
+            banding = false
+            editor.endBand(at: p)
         } else if drawing {
             drawing = false
             editor.mouseUp(at: p)
@@ -192,7 +201,7 @@ final class PinAnnotateView: NSView {
         guard let editor else { return super.keyDown(with: event) }
         let code = Int(event.keyCode)
         if code == 53 {                                              // Esc：有选中的先取消选中，没有就放弃这次画的
-            if editor.selectedIndex != nil { editor.deselect() } else { editor.onCancel?() }
+            if editor.hasSelection { editor.deselect() } else { editor.onCancel?() }
             return
         }
         if code == 51 || code == 117 { editor.deleteSelected(); return }   // ⌫ / Delete：删掉选中的
@@ -212,6 +221,7 @@ final class PinAnnotateView: NSView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard let editor else { return super.performKeyEquivalent(with: event) }
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if mods == .command, editor.handleArrangeKey(event.keyCode) { return true }    // ⌘A ⌘D ⌘] ⌘[（台阶 19）
         guard mods.contains(.command), let key = event.charactersIgnoringModifiers?.lowercased() else {
             return super.performKeyEquivalent(with: event)
         }

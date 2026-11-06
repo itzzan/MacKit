@@ -14,6 +14,10 @@ final class AnnotationCanvasView: NSView {
         var round: Bool                 // 箭头的头尾用小圆点
     }
     var selectionLook: SelectionLook? { didSet { if selectionLook != oldValue { needsDisplay = true } } }
+    /// 选了好几个时：每个一圈虚线框，没有小方块（台阶 19）
+    var groupFrames: [CGRect] = [] { didSet { if groupFrames != oldValue { needsDisplay = true } } }
+    /// ⇧ 拖出来的框选框（台阶 19）
+    var bandRect: CGRect? { didSet { if bandRect != oldValue { needsDisplay = true } } }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -25,16 +29,8 @@ final class AnnotationCanvasView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    override func draw(_ dirtyRect: NSRect) {
-        guard let ctx = NSGraphicsContext.current?.cgContext, !clipRect.isEmpty else { return }
-        ctx.saveGState()
-        ctx.clip(to: clipRect)
-        for a in annotations { AnnotationRenderer.draw(a, in: ctx, mosaic: mosaic) }
-        if let pending { AnnotationRenderer.draw(pending, in: ctx, mosaic: mosaic) }
-        ctx.restoreGState()
-        guard let look = selectionLook else { return }
-        // 虚线框：白底蓝虚线，压在什么颜色上都看得见
-        let frame = look.frame.insetBy(dx: -4, dy: -4)
+    /// 虚线框：白底蓝虚线，压在什么颜色上都看得见
+    private func strokeDashed(_ frame: CGRect, in ctx: CGContext) {
         ctx.setLineWidth(1)
         ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.9).cgColor)
         ctx.stroke(frame)
@@ -42,6 +38,23 @@ final class AnnotationCanvasView: NSView {
         ctx.setStrokeColor(Theme.accent.cgColor)
         ctx.stroke(frame)
         ctx.setLineDash(phase: 0, lengths: [])
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext, !clipRect.isEmpty else { return }
+        ctx.saveGState()
+        ctx.clip(to: clipRect)
+        for a in annotations { AnnotationRenderer.draw(a, in: ctx, mosaic: mosaic) }
+        if let pending { AnnotationRenderer.draw(pending, in: ctx, mosaic: mosaic) }
+        ctx.restoreGState()
+        for f in groupFrames { strokeDashed(f.insetBy(dx: -4, dy: -4), in: ctx) }
+        if let band = bandRect, !band.isEmpty {
+            ctx.setFillColor(Theme.accent.withAlphaComponent(0.12).cgColor)
+            ctx.fill(band)
+            strokeDashed(band, in: ctx)
+        }
+        guard let look = selectionLook else { return }
+        strokeDashed(look.frame.insetBy(dx: -4, dy: -4), in: ctx)
         for c in look.handles {
             let dot = CGRect(x: c.x - 4, y: c.y - 4, width: 8, height: 8)
             ctx.setFillColor(NSColor.white.cgColor)

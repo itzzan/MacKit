@@ -41,6 +41,8 @@ enum SelfTest {
         testAnnotationExport()
         testEditingFlow()
         testSelectEdit()
+        testMultiSelect()
+        testGroupDragFixes()
         testBeautify()
         testPinTransforms()
         testTextEditing()
@@ -433,6 +435,214 @@ enum SelfTest {
     // MARK: 文字工具：拼音看得见、写好的字能再改（2026-11-04 用户验收时提的两个问题）
 
     /// 台阶 12：点一下画好的东西就选中，能拖、能改大小、能换颜色、能删；模糊打码
+    // MARK: 台阶 19 一次选好几个、复制、上下层
+
+    private static func testMultiSelect() {
+        let viewSize = CGSize(width: 1512, height: 982)
+        let image = makeTestImage(width: 3024, height: 1964)
+        let container = NSView(frame: CGRect(origin: .zero, size: viewSize))
+        let view = SelectionView(frame: container.bounds, image: image, windowRects: [], scale: 2)
+        container.addSubview(view)
+        let editor = AnnotationEditor(container: container, mosaic: MosaicSource(image: image, viewSize: viewSize))
+        defer { editor.tearDown() }
+        var cancelled = 0, done = 0
+        view.onCancel = { cancelled += 1 }
+        view.onDone = { done += 1 }
+        view.beginEditing(editor, selection: CGRect(x: 100, y: 100, width: 800, height: 600))
+        editor.setColor(.red)
+        editor.setSize(.medium)
+        func click(_ x: CGFloat, _ y: CGFloat, _ mods: NSEvent.ModifierFlags = []) {
+            view.mouseDown(with: mouse(.leftMouseDown, x, y, mods: mods))
+            view.mouseUp(with: mouse(.leftMouseUp, x, y, mods: mods))
+        }
+        func drag(_ from: CGPoint, _ to: CGPoint, _ mods: NSEvent.ModifierFlags = []) {
+            view.mouseDown(with: mouse(.leftMouseDown, from.x, from.y, mods: mods))
+            view.mouseDragged(with: mouse(.leftMouseDragged, (from.x + to.x) / 2, (from.y + to.y) / 2, mods: mods))
+            view.mouseDragged(with: mouse(.leftMouseDragged, to.x, to.y, mods: mods))
+            view.mouseUp(with: mouse(.leftMouseUp, to.x, to.y, mods: mods))
+        }
+        func command(_ chars: String, _ code: UInt16) -> Bool { view.performKeyEquivalent(with: key(chars, code: code, mods: .command)) }
+        var items: [Annotation] { editor.document.items }
+
+        // ①②③
+        view.keyDown(with: key("n", code: 45))
+        for x in [200, 260, 320] as [CGFloat] { click(x, 200) }
+        editor.selectTool(nil)
+        check(items.map(\.number) == [1, 2, 3], "准备：画了 ①②③")
+
+        // ⇧ 在空白处拖框选
+        view.mouseDown(with: mouse(.leftMouseDown, 150, 150, mods: .shift))
+        view.mouseDragged(with: mouse(.leftMouseDragged, 300, 230, mods: .shift))
+        check(editor.isBandSelecting && editor.canvas.bandRect != nil && editor.selectedIndices == IndexSet([0, 1]),
+              "按住 ⇧ 在空白处拖：拖的时候画出框，框到的跟着选上")
+        view.mouseDragged(with: mouse(.leftMouseDragged, 350, 250, mods: .shift))
+        view.mouseUp(with: mouse(.leftMouseUp, 350, 250, mods: .shift))
+        check(editor.selectedIndices == IndexSet(0...2) && editor.canvas.bandRect == nil && editor.canvas.groupFrames.count == 3
+              && editor.canvas.selectionLook == nil && items.count == 3,
+              "松手：三个都选上，每个一圈虚线框、没有改大小的小方块；没画出新东西")
+
+        // 一起拖、只算一步撤销
+        drag(CGPoint(x: 260, y: 200), CGPoint(x: 260, y: 300))
+        check(items.allSatisfy { $0.points[0].y == 300 } && editor.selectedIndices.count == 3, "点住其中一个拖：三个一起挪")
+        editor.undo()
+        check(items.allSatisfy { $0.points[0].y == 200 }, "一起拖一次 = 撤销一步，三个都回去")
+
+        // ⌘A、一起删
+        check(command("a", 0) && editor.selectedIndices == IndexSet(0...2), "⌘A：全选")
+        view.keyDown(with: key("\u{7f}", code: 51))
+        check(items.isEmpty, "⌫：一起删掉")
+        editor.undo()
+        check(items.count == 3, "一起删一次 = 撤销一步，三个都回来")
+
+        // ⇧ 点加选、去掉，一起换颜色
+        view.keyDown(with: key("r", code: 15))
+        drag(CGPoint(x: 400, y: 400), CGPoint(x: 600, y: 500))
+        view.keyDown(with: key("a", code: 0))
+        drag(CGPoint(x: 420, y: 450), CGPoint(x: 580, y: 450))
+        editor.selectTool(nil)
+        check(items.count == 5 && items[3].tool == .rect && items[4].tool == .arrow, "准备：再画一个框、框里一个箭头")
+        click(400, 450)
+        click(500, 450, .shift)
+        check(editor.selectedIndices == IndexSet([3, 4]) && editor.selectedIndex == nil, "点框、再 ⇧ 点箭头：两个都选上")
+        editor.setColor(.blue)
+        check(items[3].color == .blue && items[4].color == .blue && items[0].color == .red, "点蓝色：选上的两个都变蓝，别的不动")
+        editor.undo()
+        check(items[3].color == .red && items[4].color == .red, "一起换颜色 = 撤销一步")
+        editor.redo()
+        click(400, 450)
+        click(500, 450, .shift)
+        click(500, 450, .shift)
+        check(editor.selectedIndices == IndexSet([3]), "再 ⇧ 点一下箭头：箭头去掉，只剩框")
+        click(500, 450, .shift)
+        click(500, 450)
+        check(editor.selectedIndices == IndexSet([4]), "选着一组时只点其中一个（不拖）：改成只选它")
+
+        // ⌘D 复制
+        let arrow = items[4]
+        check(command("d", 2) && items.count == 6 && editor.selectedIndices == IndexSet([5])
+              && items[5] == arrow.moved(by: CGVector(dx: 10, dy: -10)) && items[4] == arrow,
+              "⌘D：复制一份，往右下错开一点，新的那份选中")
+        editor.undo()
+        check(items.count == 5, "复制一次 = 撤销一步")
+        click(260, 200)
+        _ = command("d", 2)
+        check(items.count == 6 && items[5].tool == .number && items[5].number == 4, "复制 ②：多出 ④（序号接着编）")
+        editor.undo()
+
+        // ⌥ 拖复制
+        let rect = items[3]
+        drag(CGPoint(x: 400, y: 450), CGPoint(x: 400, y: 350), .option)
+        check(items.count == 6 && items[3] == rect && items[5] == rect.moved(by: CGVector(dx: 0, dy: -100))
+              && editor.selectedIndices == IndexSet([5]), "按住 ⌥ 拖框：原来的不动，拖出来一个新的")
+        editor.undo()
+        check(items.count == 5 && items[3] == rect, "⌥ 拖一次 = 撤销一步")
+
+        // 上下层
+        click(400, 450)
+        check(editor.toolbar.isShowingArrange, "选中东西：工具栏那排多\u{201C}放到最上\u{201D}\u{201C}放到最下\u{201D}")
+        check(command("]", 30) && items[4].tool == .rect && items[3].tool == .arrow && editor.selectedIndex == 4, "⌘]：框放到最上")
+        check(command("[", 33) && items[0].tool == .rect && editor.selectedIndex == 0, "⌘[：框放到最下")
+        editor.undo()
+        check(items[4].tool == .rect, "换一次层 = 撤销一步")
+        editor.redo()
+        click(200, 200)
+        click(320, 200, .shift)
+        editor.toolbar.onFront?()
+        check(items.map { $0.tool == .number ? "\($0.number)" : $0.tool == .rect ? "框" : "箭头" } == ["框", "2", "箭头", "1", "3"]
+              && editor.selectedIndices == IndexSet([3, 4]), "①③一起点\u{201C}放到最上\u{201D}：它俩到最上，先后不变（① 还在 ③ 下面）")
+        view.keyDown(with: key("\u{1b}", code: 53))
+        check(!editor.hasSelection && cancelled == 0 && !editor.toolbar.isShowingArrange, "选着一组时 Esc：只取消选中，不取消截图")
+        check(command("d", 2) && items.count == 5, "什么都没选时 ⌘D：什么都不做")
+        check(command("c", 8) && done == 1, "⌘C 照旧是复制整张截图并完成")
+
+        // 贴图标注、屏幕画笔（同一套按键，用屏幕画笔测）
+        let pen = ScreenPenSession(region: CGRect(x: 100, y: 100, width: 400, height: 300), present: false)
+        defer { pen.close() }
+        pen.begin(takeKeyboard: false)
+        for y in [80, 160] as [CGFloat] {
+            pen.input.mouseDown(with: mouse(.leftMouseDown, 50, y))
+            pen.input.mouseDragged(with: mouse(.leftMouseDragged, 120, y + 10))
+            pen.input.mouseUp(with: mouse(.leftMouseUp, 200, y + 20))
+        }
+        pen.input.mouseDown(with: mouse(.leftMouseDown, 10, 10, mods: .shift))
+        pen.input.mouseDragged(with: mouse(.leftMouseDragged, 300, 250, mods: .shift))
+        pen.input.mouseUp(with: mouse(.leftMouseUp, 300, 250, mods: .shift))
+        check(pen.editor.document.items.count == 2 && pen.editor.selectedIndices == IndexSet([0, 1]),
+              "屏幕画笔（贴图标注同一套）：⇧ 拖框选住两笔，没画出新的")
+        _ = pen.input.performKeyEquivalent(with: key("d", code: 2, mods: .command))
+        check(pen.editor.document.items.count == 4 && pen.editor.selectedIndices == IndexSet([2, 3]), "屏幕画笔里 ⌘D：两笔一起复制")
+        let before = pen.editor.document.items.map(\.points)
+        pen.input.mouseDown(with: mouse(.leftMouseDown, 80, 150))
+        pen.input.mouseDragged(with: mouse(.leftMouseDragged, 80, 170))
+        pen.input.mouseUp(with: mouse(.leftMouseUp, 80, 170))
+        check(pen.editor.document.items.count == 4 && pen.editor.document.items[2].points.first?.y == (before[2].first?.y ?? 0) + 20
+              && pen.editor.document.items[0].points == before[0],
+              "屏幕画笔里选着两笔时，按在它们的虚线框里（不在线上）拖：两笔一起挪，不会画出新的一笔")
+        pen.input.keyDown(with: key("\u{7f}", code: 51))
+        check(pen.editor.document.items.count == 2, "屏幕画笔里 ⌫：复制出来的两笔一起删掉")
+        check(pen.editor.toolbar.arrangeButtons.count == 2, "屏幕画笔的小工具也有\u{201C}放到最上 / 最下\u{201D}")
+    }
+
+    /// 2026-11-06 验收：拖不动——按着 ⇧ 拖一组、按在选上的框中间拖，都要能挪
+    private static func testGroupDragFixes() {
+        let viewSize = CGSize(width: 1512, height: 982)
+        let image = makeTestImage(width: 3024, height: 1964)
+        let container = NSView(frame: CGRect(origin: .zero, size: viewSize))
+        let view = SelectionView(frame: container.bounds, image: image, windowRects: [], scale: 2)
+        container.addSubview(view)
+        let editor = AnnotationEditor(container: container, mosaic: MosaicSource(image: image, viewSize: viewSize))
+        defer { editor.tearDown() }
+        view.beginEditing(editor, selection: CGRect(x: 100, y: 100, width: 800, height: 600))
+        editor.setColor(.red)
+        editor.setSize(.medium)
+        func drag(_ from: CGPoint, _ to: CGPoint, _ mods: NSEvent.ModifierFlags = []) {
+            view.mouseDown(with: mouse(.leftMouseDown, from.x, from.y, mods: mods))
+            view.mouseDragged(with: mouse(.leftMouseDragged, (from.x + to.x) / 2, (from.y + to.y) / 2, mods: mods))
+            view.mouseDragged(with: mouse(.leftMouseDragged, to.x, to.y, mods: mods))
+            view.mouseUp(with: mouse(.leftMouseUp, to.x, to.y, mods: mods))
+        }
+        func click(_ x: CGFloat, _ y: CGFloat, _ mods: NSEvent.ModifierFlags = []) {
+            view.mouseDown(with: mouse(.leftMouseDown, x, y, mods: mods))
+            view.mouseUp(with: mouse(.leftMouseUp, x, y, mods: mods))
+        }
+        var boxes: [CGRect] { editor.document.items.map(\.box) }
+        let a = CGRect(x: 200, y: 200, width: 100, height: 100), b = CGRect(x: 400, y: 200, width: 100, height: 100)
+
+        view.keyDown(with: key("r", code: 15))
+        drag(CGPoint(x: 200, y: 200), CGPoint(x: 300, y: 300))
+        drag(CGPoint(x: 400, y: 200), CGPoint(x: 500, y: 300))
+        editor.selectTool(nil)
+        drag(CGPoint(x: 150, y: 150), CGPoint(x: 550, y: 350), .shift)
+        check(boxes == [a, b] && editor.selectedIndices == IndexSet([0, 1]), "准备：两个框，⇧ 框选住")
+
+        drag(CGPoint(x: 200, y: 250), CGPoint(x: 200, y: 150), .shift)
+        check(boxes == [a.offsetBy(dx: 0, dy: -100), b.offsetBy(dx: 0, dy: -100)] && editor.selectedIndices == IndexSet([0, 1]),
+              "框选完还按着 ⇧ 拖：两个一起挪（以前拖不动）")
+        editor.undo()
+        drag(CGPoint(x: 400, y: 250), CGPoint(x: 400, y: 150), .shift)
+        check(boxes == [a, b.offsetBy(dx: 0, dy: -100)] && editor.selectedIndices == IndexSet([1]),
+              "撤销后（没选着）⇧ 按住一个拖：先选上它，再挪它")
+        editor.undo()
+        drag(CGPoint(x: 150, y: 150), CGPoint(x: 550, y: 350), .shift)
+        check(editor.editCursor(at: CGPoint(x: 250, y: 250)) == .openHand, "选着一组时，鼠标在框中间变成张开的手：能抓住")
+        drag(CGPoint(x: 250, y: 250), CGPoint(x: 250, y: 330))
+        check(boxes == [a.offsetBy(dx: 0, dy: 80), b.offsetBy(dx: 0, dy: 80)], "选着一组时按在框中间（不在线上）拖：一起挪（以前拖不动）")
+        click(450, 330, .shift)
+        check(editor.selectedIndices == IndexSet([0]), "⇧ 点一下（不拖）已经选上的：还是把它去掉")
+
+        editor.undo()
+        click(200, 250)
+        drag(CGPoint(x: 250, y: 250), CGPoint(x: 280, y: 250))
+        check(boxes == [a.offsetBy(dx: 30, dy: 0), b], "没拿工具、只选着一个框：按在框中间拖也能挪它")
+        editor.undo()
+
+        view.keyDown(with: key("r", code: 15))
+        click(200, 250)
+        drag(CGPoint(x: 230, y: 230), CGPoint(x: 270, y: 270))
+        check(boxes.count == 3 && boxes[0] == a && editor.selectedIndices == IndexSet([2]),
+              "拿着框工具时在选着的框中间按下：照旧画一个新的（框里起笔画箭头这类不受影响）")
+    }
+
     private static func testSelectEdit() {
         let viewSize = CGSize(width: 1512, height: 982)
         let image = makeTestImage(width: 3024, height: 1964)
@@ -2450,8 +2660,9 @@ enum SelfTest {
 
     private static let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
 
-    private static func mouse(_ type: NSEvent.EventType, _ x: CGFloat, _ y: CGFloat, clicks: Int = 1) -> NSEvent {
-        NSEvent.mouseEvent(with: type, location: CGPoint(x: x, y: y), modifierFlags: [], timestamp: 0,
+    private static func mouse(_ type: NSEvent.EventType, _ x: CGFloat, _ y: CGFloat, clicks: Int = 1,
+                              mods: NSEvent.ModifierFlags = []) -> NSEvent {
+        NSEvent.mouseEvent(with: type, location: CGPoint(x: x, y: y), modifierFlags: mods, timestamp: 0,
                            windowNumber: 0, context: nil, eventNumber: 0, clickCount: clicks, pressure: 1)!
     }
 

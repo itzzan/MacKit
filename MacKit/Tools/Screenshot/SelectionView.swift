@@ -62,6 +62,7 @@ final class SelectionView: NSView {
         case move(start: CGPoint, original: CGRect)
         case draw
         case edit                   // 拖选中的标注（台阶 12）
+        case band                   // ⇧ 在空白处拖：框选（台阶 19）
     }
     private var drag: Drag = .none
 
@@ -386,7 +387,11 @@ final class SelectionView: NSView {
                 onDone?()                                            // 没选工具时双击框里空白处 = 完成
             } else if editor.canAdjustSelection, let h = EditGeometry.handle(at: p, in: sel) {
                 drag = .resize(h, original: sel)
-            } else if !(editor.tool == .text && editor.document.textIndex(at: p) != nil), editor.beginEdit(at: p) {
+            } else if event.modifierFlags.contains(.shift), !editor.document.items.isEmpty {
+                // ⇧ 点画好的东西 = 加选 / 去掉；⇧ 在空白处拖 = 框选（台阶 19）
+                if editor.beginShiftPress(at: p) { drag = .edit } else { editor.beginBand(at: p); drag = .band }
+            } else if !(editor.tool == .text && editor.document.textIndex(at: p) != nil),
+                      editor.beginEdit(at: p, duplicate: event.modifierFlags.contains(.option)) {
                 drag = .edit                                         // 点中画好的东西：选中它，拖它
             } else if let tool = editor.tool, sel.contains(p) {
                 editor.mouseDown(at: p)
@@ -423,6 +428,8 @@ final class SelectionView: NSView {
             editor?.mouseDragged(to: p)
         case .edit:
             editor?.dragEdit(to: p)
+        case .band:
+            editor?.dragBand(to: p)
         }
     }
 
@@ -450,6 +457,8 @@ final class SelectionView: NSView {
         case .edit:
             editor?.endEdit(at: p)
             cursor(at: p).set()
+        case .band:
+            editor?.endBand(at: p)
         case .move:
             cursor(at: p).set()
         default:
@@ -464,7 +473,7 @@ final class SelectionView: NSView {
     override func keyDown(with event: NSEvent) {
         let code = Int(event.keyCode)
         if code == 53 {                                               // Esc：有选中的先取消选中，没有就取消截图
-            if mode == .editing, let editor, editor.selectedIndex != nil { editor.deselect(); return }
+            if mode == .editing, let editor, editor.hasSelection { editor.deselect(); return }
             onCancel?()
             return
         }
@@ -512,6 +521,7 @@ final class SelectionView: NSView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard mode == .editing, let editor else { return super.performKeyEquivalent(with: event) }
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if mods == .command, editor.handleArrangeKey(event.keyCode) { return true }    // ⌘A ⌘D ⌘] ⌘[（台阶 19）
         guard mods.contains(.command), let key = event.charactersIgnoringModifiers?.lowercased() else {
             return super.performKeyEquivalent(with: event)
         }

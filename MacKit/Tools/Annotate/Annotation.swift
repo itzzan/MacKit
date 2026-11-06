@@ -189,6 +189,69 @@ final class AnnotationDocument {
         items.removeAll()
     }
 
+    // MARK: 一次改好几个（台阶 19）：每样都只算一步撤销
+
+    /// 好几个一起换（一起换颜色、一起挪）
+    func replace(_ changes: [Int: Annotation]) {
+        let valid = changes.filter { items.indices.contains($0.key) && items[$0.key] != $0.value }
+        guard !valid.isEmpty else { return }
+        record()
+        for (i, a) in valid { items[i] = a }
+    }
+
+    /// 好几个一起删
+    func remove(_ indices: IndexSet) {
+        let valid = indices.filteredIndexSet { items.indices.contains($0) }
+        guard !valid.isEmpty else { return }
+        record()
+        for i in valid.reversed() { items.remove(at: i) }
+    }
+
+    /// 复制一份：加在最后（自然在最上层），错开 offset；序号接着往下编。返回新的几个在哪
+    func duplicate(_ indices: IndexSet, offset: CGVector) -> IndexSet {
+        let copies = copies(of: indices, offset: offset)
+        guard !copies.isEmpty else { return [] }
+        record()
+        let start = items.count
+        items += copies
+        return IndexSet(start..<items.count)
+    }
+
+    /// ⌥ 拖复制：拖之前就复制好（不另记撤销，和拖动一起在 endLive 时算一步）
+    func duplicateLive(_ indices: IndexSet) -> IndexSet {
+        guard liveBase != nil else { return [] }
+        let copies = copies(of: indices, offset: .zero)
+        let start = items.count
+        items += copies
+        return IndexSet(start..<items.count)
+    }
+
+    private func copies(of indices: IndexSet, offset: CGVector) -> [Annotation] {
+        var next = nextNumber
+        return indices.filter { items.indices.contains($0) }.map { i in
+            var a = items[i].moved(by: offset)
+            if a.tool == .number { a.number = next; next += 1 }
+            return a
+        }
+    }
+
+    /// 放到最上 / 最下：它们之间的先后不变。返回挪过以后在哪
+    func bringToFront(_ indices: IndexSet) -> IndexSet { reorder(indices, toFront: true) }
+    func sendToBack(_ indices: IndexSet) -> IndexSet { reorder(indices, toFront: false) }
+
+    private func reorder(_ indices: IndexSet, toFront: Bool) -> IndexSet {
+        let valid = indices.filteredIndexSet { items.indices.contains($0) }
+        guard !valid.isEmpty else { return [] }
+        let moving = valid.map { items[$0] }
+        let rest = items.indices.filter { !valid.contains($0) }.map { items[$0] }
+        let reordered = toFront ? rest + moving : moving + rest
+        let result = toFront ? IndexSet(rest.count..<items.count) : IndexSet(0..<moving.count)
+        guard reordered != items else { return result }
+        record()
+        items = reordered
+        return result
+    }
+
     // 拖动选中的标注：拖之前存一份，拖的过程中不记撤销，松手才算一步（台阶 12）
     private var liveBase: [Annotation]?
 

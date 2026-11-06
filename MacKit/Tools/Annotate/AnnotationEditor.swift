@@ -21,14 +21,26 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
     private var textTopLeft: CGPoint = .zero
     /// 正在改的是第几条已有文字（nil = 新文字）
     private var editingTextIndex: Int?
-    /// 选中的是第几条（台阶 12：点一下画好的东西就选中，能拖、能改大小、能换颜色、能删）
-    private(set) var selectedIndex: Int?
+    /// 选中的是哪几条（台阶 12：点一下画好的东西就选中，能拖、能改大小、能换颜色、能删；
+    /// 台阶 19：⇧ 点加选 / 去掉、⇧ 在空白处拖框选、⌘A 全选，好几个一起拖、删、换颜色）
+    private(set) var selectedIndices = IndexSet()
+    /// 只选了一个时是第几条（改大小的小方块、拖箭头头尾只在这时有）
+    var selectedIndex: Int? { selectedIndices.count == 1 ? selectedIndices.first : nil }
+    var hasSelection: Bool { !selectedIndices.isEmpty }
     private enum EditDrag {
-        case move(start: CGPoint, original: Annotation)
-        case resize(SelectionHandle, original: Annotation)
-        case end(Int, original: Annotation)
+        case move(start: CGPoint, originals: [Int: Annotation])
+        case resize(SelectionHandle, index: Int, original: Annotation)
+        case end(Int, index: Int, original: Annotation)
     }
     private var editDrag: EditDrag?
+    /// 点在一组里的哪一个、真的拖动了没有：只点不拖 = 改成只选这一个
+    private var editClicked: Int?
+    private var editMoved = false
+    /// ⇧ 按在已经选上的那个上：没拖就松手 = 把它去掉
+    private var shiftToggleOff: Int?
+    /// ⇧ 在空白处拖出来的框（台阶 19）从哪拖起
+    private var bandStart: CGPoint?
+    var isBandSelecting: Bool { bandStart != nil }
     var isDraggingSelection: Bool { editDrag != nil }
 
     /// 选区（视图坐标）。改了以后画布裁剪和工具栏位置跟着变
@@ -80,6 +92,8 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
         toolbar.onLongShot = { [weak self] in self?.onLongShot?() }
         toolbar.onBeautify = { [weak self] in self?.onBeautify?() }
         toolbar.onClear = { [weak self] in self?.clearAll() }
+        toolbar.onFront = { [weak self] in self?.bringSelectedToFront() }
+        toolbar.onBack = { [weak self] in self?.sendSelectedToBack() }
         toolbar.onCancel = { [weak self] in self?.onCancel?() }
         toolbar.onDone = { [weak self] in self?.onDone?() }
         refresh()
@@ -100,18 +114,27 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
         refresh()
     }
 
-    /// 选中了画好的东西时，改的是它（同时记成下次画的默认）
+    /// 选中了画好的东西时，改的是它们（同时记成下次画的默认）；好几个一起改只算一步撤销
     func setColor(_ c: AnnotationColor, remember: Bool = false) {
         color = c
         if remember { Settings.annotationColorIndex = c.rawValue }
         if let tv = textView {
             styleTextView(tv)
-        } else if let i = selectedIndex, document.items.indices.contains(i) {
-            var a = document.items[i]
-            a.color = c
-            document.replace(at: i, with: a)
+        } else if hasSelection {
+            document.replace(changesForSelected { $0.color = c })
         }
         refresh()
+    }
+
+    /// 选中的每一个改成什么样
+    private func changesForSelected(_ change: (inout Annotation) -> Void) -> [Int: Annotation] {
+        var changes: [Int: Annotation] = [:]
+        for i in selectedIndices where document.items.indices.contains(i) {
+            var a = document.items[i]
+            change(&a)
+            changes[i] = a
+        }
+        return changes
     }
 
     func setSize(_ s: AnnotationSize, remember: Bool = false) {
@@ -120,10 +143,8 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
         if let tv = textView {
             styleTextView(tv)
             resizeTextView()
-        } else if let i = selectedIndex, document.items.indices.contains(i) {
-            var a = document.items[i]
-            a.size = s
-            document.replace(at: i, with: a)
+        } else if hasSelection {
+            document.replace(changesForSelected { $0.size = s })
         }
         refresh()
     }
@@ -131,27 +152,27 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
     func undo() {
         guard !isEditingText else { return }
         document.undo()
-        selectedIndex = nil
+        selectedIndices = []
         refresh()
     }
 
     func redo() {
         guard !isEditingText else { return }
         document.redo()
-        selectedIndex = nil
+        selectedIndices = []
         refresh()
     }
 
     /// 文档从外面整个换过（屏幕画笔收起时清空、连撤销记录也清掉）：重画一遍
     func reloadFromDocument() {
-        selectedIndex = nil
+        selectedIndices = []
         refresh()
     }
 
     /// 清空画的（屏幕画笔，台阶 16）
     func clearAll() {
         commitText()
-        selectedIndex = nil
+        selectedIndices = []
         document.removeAll()
         refresh()
     }
@@ -161,6 +182,14 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
     /// 鼠标点在哪一条上（叠在一起取最上面的）
     func hitIndex(at p: CGPoint) -> Int? {
         document.items.indices.last { document.items[$0].hit(p) }
+    }
+
+    /// 按在选上的那几个的虚线框里（不一定在线上）也算抓住它们（2026-11-06 验收：拖不动——框、圈、笔画只认线，
+    /// 按在框中间抓不住）。选了好几个时总是这样；只选一个时要没拿着工具（拿着工具在刚画的框里按 = 接着画新的）
+    func grabIndex(at p: CGPoint) -> Int? {
+        guard selectedIndices.count > 1 || (tool == nil && hasSelection) else { return nil }
+        return selectedIndices.reversed().first { document.items.indices.contains($0)
+            && document.items[$0].frame.insetBy(dx: -4, dy: -4).contains(p) }
     }
 
     /// 选中的那条，外框上的小方块在哪
@@ -176,37 +205,55 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
         handlePoints(of: a).first { abs(p.x - $0.2.x) <= 6 && abs(p.y - $0.2.y) <= 6 }.map { ($0.0, $0.1) }
     }
 
-    /// 鼠标按下：点在选中那个的小方块上 = 改大小 / 拖箭头一头；点在画好的东西上 = 选中它、准备挪。
+    /// 鼠标按下：点在选中那个的小方块上 = 改大小 / 拖箭头一头；点在画好的东西上 = 选中它、准备挪
+    /// （点在已经选上的一组里 = 整组一起挪）。duplicate（按住 ⌥）：拖出来的是复制的一份，原来的不动（台阶 19）。
     /// 返回 false = 什么都没点中，交给"画新的"
     @discardableResult
-    func beginEdit(at p: CGPoint) -> Bool {
-        if let i = selectedIndex, document.items.indices.contains(i), let hit = handle(at: p, of: document.items[i]) {
+    func beginEdit(at p: CGPoint, duplicate: Bool = false) -> Bool {
+        if !duplicate, let i = selectedIndex, document.items.indices.contains(i), let hit = handle(at: p, of: document.items[i]) {
             let original = document.items[i]
-            if let h = hit.0 { editDrag = .resize(h, original: original) }
-            else if let end = hit.1 { editDrag = .end(end, original: original) }
+            if let h = hit.0 { editDrag = .resize(h, index: i, original: original) }
+            else if let end = hit.1 { editDrag = .end(end, index: i, original: original) }
             document.beginLive()
             return true
         }
-        guard let i = hitIndex(at: p) else { return false }
-        select(i)
-        editDrag = .move(start: p, original: document.items[i])
+        guard let i = hitIndex(at: p) ?? grabIndex(at: p) else { return false }
+        var group = IndexSet(integer: i)
+        editMoved = false
+        editClicked = nil
+        shiftToggleOff = nil
+        if selectedIndices.contains(i) {
+            commitText()
+            group = selectedIndices
+            if !duplicate && group.count > 1 { editClicked = i }
+        } else {
+            select(i)
+        }
         document.beginLive()
-        NSCursor.closedHand.set()
+        if duplicate {
+            group = document.duplicateLive(group)
+            selectedIndices = group
+            refresh()
+        }
+        editDrag = .move(start: p, originals: Dictionary(uniqueKeysWithValues: group.map { ($0, document.items[$0]) }))
+        (duplicate ? NSCursor.dragCopy : NSCursor.closedHand).set()
         return true
     }
 
     func dragEdit(to p: CGPoint) {
-        guard let i = selectedIndex, let editDrag else { return }
-        let changed: Annotation
+        guard let editDrag else { return }
         switch editDrag {
-        case .move(let start, let original): changed = original.moved(by: CGVector(dx: p.x - start.x, dy: p.y - start.y))
-        case .resize(let h, let original):
+        case .move(let start, let originals):
+            let d = CGVector(dx: p.x - start.x, dy: p.y - start.y)
+            if d.dx != 0 || d.dy != 0 { editMoved = true }
+            for (i, a) in originals { document.updateLive(at: i, with: a.moved(by: d)) }
+        case .resize(let h, let i, let original):
             // 小方块画在外框外面 4 点，拖的时候换回到外框上，免得一按下去就跳一下
             let q = CGPoint(x: p.x + (h.movesLeft ? 4 : h.movesRight ? -4 : 0), y: p.y + (h.movesBottom ? 4 : h.movesTop ? -4 : 0))
-            changed = original.resized(h, to: q, within: selection.isEmpty ? .infinite : selection)
-        case .end(let end, let original): changed = original.withEnd(end, at: p)
+            document.updateLive(at: i, with: original.resized(h, to: q, within: selection.isEmpty ? .infinite : selection))
+        case .end(let end, let i, let original):
+            document.updateLive(at: i, with: original.withEnd(end, at: p))
         }
-        document.updateLive(at: i, with: changed)
         refresh()
     }
 
@@ -215,41 +262,145 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
         dragEdit(to: p)
         editDrag = nil
         document.endLive()
+        if let clicked = editClicked, !editMoved { select(clicked) }     // 选着一组时只点了其中一个：只选它
+        if let off = shiftToggleOff, !editMoved { selectedIndices.remove(off) }   // ⇧ 点已经选上的：去掉
+        editClicked = nil
+        shiftToggleOff = nil
         refresh()
     }
 
     func select(_ index: Int?) {
         commitText()
-        selectedIndex = index
-        if let index, document.items.indices.contains(index) {
-            // 工具栏显示它的颜色、粗细（不记成默认，免得只是点一下就改了下次画的样子）
-            color = document.items[index].color
-            size = document.items[index].size
-        }
+        selectedIndices = index.map { IndexSet(integer: $0) } ?? []
+        if let index, document.items.indices.contains(index) { showProperties(of: index) }
         refresh()
+    }
+
+    /// 工具栏显示它的颜色、粗细（不记成默认，免得只是点一下就改了下次画的样子）
+    private func showProperties(of index: Int) {
+        color = document.items[index].color
+        size = document.items[index].size
     }
 
     func deselect() {
-        guard selectedIndex != nil else { return }
-        selectedIndex = nil
+        guard hasSelection else { return }
+        selectedIndices = []
         refresh()
     }
 
-    /// ⌫ / Delete：删掉选中的
+    // MARK: 一次选好几个、复制、上下层（台阶 19）
+
+    /// ⇧ 按在画好的东西上：没选上的先加进来；按着拖 = 选上的一起挪（2026-11-06 验收：框选完还按着 ⇧ 拖，拖不动）；
+    /// 没拖就松手 = 点一下：原来就选上的去掉。没按在东西上返回 false（交给框选）
     @discardableResult
-    func deleteSelected() -> Bool {
-        guard !isEditingText, let i = selectedIndex, document.items.indices.contains(i) else { return false }
-        document.remove(at: i)
-        selectedIndex = nil
+    func beginShiftPress(at p: CGPoint) -> Bool {
+        guard let i = hitIndex(at: p) ?? grabIndex(at: p) else { return false }
+        commitText()
+        let wasSelected = selectedIndices.contains(i)
+        if !wasSelected {
+            selectedIndices.insert(i)
+            showProperties(of: i)
+        }
+        editMoved = false
+        editClicked = nil
+        shiftToggleOff = wasSelected ? i : nil
+        document.beginLive()
+        editDrag = .move(start: p, originals: Dictionary(uniqueKeysWithValues: selectedIndices.map { ($0, document.items[$0]) }))
         refresh()
         return true
     }
 
-    /// 方向键：选中的挪 1 点
+    /// ⇧ 在空白处拖：框碰到的就是选上的（不算刚画完自动选着的那个；想再加就 ⇧ 点）
+    func beginBand(at p: CGPoint) {
+        commitText()
+        bandStart = p
+        canvas.bandRect = CGRect(origin: p, size: .zero)
+    }
+
+    func dragBand(to p: CGPoint) {
+        guard let start = bandStart else { return }
+        let band = Geometry.rect(from: start, to: p)
+        canvas.bandRect = band
+        selectedIndices = indices(touching: band)
+        refresh()
+    }
+
+    func endBand(at p: CGPoint) {
+        guard bandStart != nil else { return }
+        dragBand(to: p)
+        bandStart = nil
+        canvas.bandRect = nil
+        if let last = selectedIndices.last { showProperties(of: last) }
+        refresh()
+    }
+
+    /// 外框和这个框碰到的
+    func indices(touching band: CGRect) -> IndexSet {
+        IndexSet(document.items.indices.filter { band.intersects(document.items[$0].frame.insetBy(dx: -1, dy: -1)) })
+    }
+
+    @discardableResult
+    func selectAll() -> Bool {
+        guard !isEditingText, !document.items.isEmpty else { return false }
+        selectedIndices = IndexSet(document.items.indices)
+        refresh()
+        return true
+    }
+
+    /// ⌘D：复制一份，往右下错开 10 点；新的那份选中
+    @discardableResult
+    func duplicateSelected() -> Bool {
+        guard !isEditingText, hasSelection else { return false }
+        selectedIndices = document.duplicate(selectedIndices, offset: CGVector(dx: 10, dy: -10))
+        refresh()
+        return true
+    }
+
+    @discardableResult
+    func bringSelectedToFront() -> Bool {
+        guard !isEditingText, hasSelection else { return false }
+        selectedIndices = document.bringToFront(selectedIndices)
+        refresh()
+        return true
+    }
+
+    @discardableResult
+    func sendSelectedToBack() -> Bool {
+        guard !isEditingText, hasSelection else { return false }
+        selectedIndices = document.sendToBack(selectedIndices)
+        refresh()
+        return true
+    }
+
+    /// ⌘A 全选、⌘D 复制一份、⌘] 放到最上、⌘[ 放到最下（按键位认，中文输入法下也一样）。
+    /// 打字时不管（⌘A 留给文字）；返回 true = 这个键归标注管（没选东西时也吞掉，免得"嘟"一声）
+    func handleArrangeKey(_ keyCode: UInt16) -> Bool {
+        guard !isEditingText else { return false }
+        switch keyCode {
+        case 0: selectAll()
+        case 2: duplicateSelected()
+        case 30: bringSelectedToFront()
+        case 33: sendSelectedToBack()
+        default: return false
+        }
+        return true
+    }
+
+    /// ⌫ / Delete：删掉选中的（好几个一起删只算一步）
+    @discardableResult
+    func deleteSelected() -> Bool {
+        guard !isEditingText, hasSelection else { return false }
+        document.remove(selectedIndices)
+        selectedIndices = []
+        refresh()
+        return true
+    }
+
+    /// 方向键：选中的一起挪 1 点
     @discardableResult
     func nudgeSelected(by d: CGVector) -> Bool {
-        guard !isEditingText, let i = selectedIndex, document.items.indices.contains(i) else { return false }
-        document.replace(at: i, with: document.items[i].moved(by: d))
+        guard !isEditingText, hasSelection else { return false }
+        document.replace(changesForSelected { $0 = $0.moved(by: d) })
         refresh()
         return true
     }
@@ -262,7 +413,8 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
             return .crosshair
         }
         if tool == .text, document.textIndex(at: p) != nil { return nil }       // 文字工具点文字 = 接着改
-        return hitIndex(at: p) != nil ? .pointingHand : nil
+        if hitIndex(at: p) != nil { return .pointingHand }
+        return grabIndex(at: p) != nil ? .openHand : nil                         // 选上的虚线框里：能抓住拖
     }
 
     static func cursorPosition(_ h: SelectionHandle) -> NSCursor.FrameResizePosition {
@@ -282,13 +434,13 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
 
     func mouseDown(at p: CGPoint) {
         guard let tool else { return }
-        selectedIndex = nil
+        selectedIndices = []
         switch tool {
         case .text:
             if !editText(at: p) { startText(at: p) }
         case .number:
             document.add(Annotation(tool: .number, color: color, size: size, points: [p], number: document.nextNumber))
-            selectedIndex = document.items.count - 1                  // 放好就选中，马上能挪
+            selectedIndices = [document.items.count - 1]              // 放好就选中，马上能挪
             refresh()
         case .pen, .highlighter:
             pending = Annotation(tool: tool, color: color, size: size, points: [p])
@@ -313,7 +465,7 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
         mouseDragged(to: p)
         if let a = pending, a.isMeaningful {
             document.add(a)
-            selectedIndex = document.items.count - 1                  // 画完保持选中，马上能调（拍板）
+            selectedIndices = [document.items.count - 1]              // 画完保持选中，马上能调（拍板）
         }
         pending = nil
         canvas.pending = nil
@@ -340,7 +492,7 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
         commitText()
         textTopLeft = p
         editingTextIndex = index
-        selectedIndex = nil
+        selectedIndices = []
         let tv = AnnotationTextView(frame: .zero)
         tv.isRichText = false
         tv.allowsUndo = true
@@ -418,15 +570,17 @@ final class AnnotationEditor: NSObject, NSTextViewDelegate {
     private func refresh() {
         // 正在改的那条文字先不画，免得和输入框叠在一起
         canvas.annotations = document.items.enumerated().filter { $0.offset != editingTextIndex }.map(\.element)
-        if let i = selectedIndex, !document.items.indices.contains(i) { selectedIndex = nil }
+        selectedIndices = selectedIndices.filteredIndexSet { document.items.indices.contains($0) }
         if let i = selectedIndex, textView == nil {
             let a = document.items[i]
             canvas.selectionLook = .init(frame: a.frame, handles: handlePoints(of: a).map(\.2), round: a.handles == .ends)
         } else {
             canvas.selectionLook = nil
         }
+        // 选了好几个：每个一圈虚线框，不显示改大小的小方块（一起缩放不做）
+        canvas.groupFrames = textView == nil && selectedIndices.count > 1 ? selectedIndices.map { document.items[$0].frame } : []
         toolbar.update(tool: tool, color: color, size: size, canUndo: document.canUndo, canRedo: document.canRedo,
-                       showProperties: tool != nil || selectedIndex != nil)
+                       showProperties: tool != nil || hasSelection, showArrange: hasSelection && textView == nil)
         layoutToolbar()
         onChange?()
     }

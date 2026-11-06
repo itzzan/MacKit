@@ -192,6 +192,9 @@ final class AnnotationToolbar: NSView {
     var onLongShot: (() -> Void)?
     var onBeautify: (() -> Void)?
     var onClear: (() -> Void)?
+    /// 放到最上 / 最下（台阶 19）
+    var onFront: (() -> Void)?
+    var onBack: (() -> Void)?
     var onCancel: (() -> Void)?
     var onDone: (() -> Void)?
 
@@ -201,6 +204,9 @@ final class AnnotationToolbar: NSView {
     private var undoButton: ToolbarButton!
     private var redoButton: ToolbarButton!
     private let propertyRow = NSStackView()
+    /// 选中画好的东西时才露出来：放到最上、放到最下（台阶 19）
+    private(set) var arrangeButtons: [ToolbarButton] = []
+    private let arrangeDivider = Theme.dividerView()
     private let stack = NSStackView()
     let mode: Mode
     private(set) var hasPinAndSave = true
@@ -264,7 +270,11 @@ final class AnnotationToolbar: NSView {
             let button = ToolbarButton(title: size.title, tip: "粗细：\(size.title)") { [weak self] in self?.onSize?(size) }
             sizeButtons.append(button)
         }
-        propertyRow.setViews(swatches + [Self.divider()] + sizeButtons, in: .leading)
+        let front = ToolbarButton(symbol: "square.2.layers.3d.top.filled", tip: "放到最上（⌘]）") { [weak self] in self?.onFront?() }
+        let back = ToolbarButton(symbol: "square.2.layers.3d.bottom.filled", tip: "放到最下（⌘[）") { [weak self] in self?.onBack?() }
+        arrangeButtons = [front, back]
+        propertyRow.setViews(swatches + [Self.divider()] + sizeButtons + [arrangeDivider] + arrangeButtons, in: .leading)
+        propertyRow.detachesHiddenViews = true
         propertyRow.orientation = .horizontal
         propertyRow.spacing = 6
         propertyRow.isHidden = true
@@ -298,8 +308,11 @@ final class AnnotationToolbar: NSView {
     private static func divider() -> NSView { Theme.dividerView() }
 
     /// showProperties：没选工具、但选中了一个画好的东西时，也要露出颜色和粗细（台阶 12）
+    /// showArrange：选中了画好的东西时，那一排后面多"放到最上""放到最下"（台阶 19）
     func update(tool: AnnotationTool?, color: AnnotationColor, size: AnnotationSize, canUndo: Bool, canRedo: Bool,
-                showProperties: Bool? = nil) {
+                showProperties: Bool? = nil, showArrange: Bool = false) {
+        arrangeDivider.isHidden = !showArrange
+        for b in arrangeButtons { b.isHidden = !showArrange }
         for (t, button) in toolButtons { button.isSelectedLook = t == tool }
         for swatch in swatches { swatch.isSelectedLook = swatch.color == color }
         for (i, button) in sizeButtons.enumerated() { button.isSelectedLook = i == size.rawValue }
@@ -313,4 +326,5 @@ final class AnnotationToolbar: NSView {
     }
 
     var isShowingProperties: Bool { !propertyRow.isHidden }
+    var isShowingArrange: Bool { !propertyRow.isHidden && arrangeButtons.allSatisfy { !$0.isHidden } }
 }
