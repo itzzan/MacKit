@@ -117,7 +117,7 @@ final class SelectionSession {
 
     private static let recordHint = "选择要录制的区域　·　单击录一个窗口　·　桌面上单击 = 录整屏　·　Esc 或右键取消"
     private static let recognizeHint = "框选要识别文字的区域　·　单击选窗口　·　Esc 或右键取消"
-    private static let longShotHint = "框选要长截图的区域（比如网页正文、聊天记录），选好后往下滚　·　单击选窗口　·　Esc 或右键取消"
+    private static let longShotHint = "框选要长截图的区域（比如网页正文、聊天记录），选好后往下或往右滚　·　单击选窗口　·　Esc 或右键取消"
 
     private var hint: String? {
         switch purpose {

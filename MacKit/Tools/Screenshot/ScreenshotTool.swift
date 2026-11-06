@@ -168,7 +168,7 @@ final class ScreenshotTool: ToolModule {
             items.append(.info("　 先退出 \(rival)，或在「设置 → 快捷键」里换一个"))
         }
         items.append(ActionMenuItem("截取整个屏幕") { [weak self] in self?.captureFullScreen() })
-        items.append(ActionMenuItem("长截图（框选后往下滚，拼成一张长图）") { [weak self] in
+        items.append(ActionMenuItem("长截图（框选后往下或往右滚，拼成一张长图）") { [weak self] in
             self?.startSelection(delay: 0.2, purpose: .longShot)
         })
         let delayMenu = NSMenu()

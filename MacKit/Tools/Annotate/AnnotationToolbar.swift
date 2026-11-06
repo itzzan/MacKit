@@ -239,7 +239,7 @@ final class AnnotationToolbar: NSView {
         let recognize = ToolbarButton(symbol: "text.viewfinder", tip: "识别文字（框里的字复制出来）") { [weak self] in
             self?.onRecognize?()
         }
-        let longShot = ToolbarButton(symbol: "rectangle.expand.vertical", tip: "长截图：框不动，往下滚动拼成一张长图") { [weak self] in
+        let longShot = ToolbarButton(symbol: "rectangle.expand.vertical", tip: "长截图：框不动，往下或往右滚动拼成一张长图") { [weak self] in
             self?.onLongShot?()
         }
         let beautify = ToolbarButton(symbol: "wand.and.stars", tip: "美化：加背景、圆角、阴影") { [weak self] in

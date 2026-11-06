@@ -5,9 +5,14 @@ import CoreMedia
 /// 长截图期间的进展（交给主线程更新控制条、预览条）
 struct LongShotProgress {
     let event: ScrollStitcher.Event
+    /// 沿拼的方向有多长（竖着是高，横着是宽；像素）
     let totalHeight: Int
     let screens: Double
     let thumb: CGImage?
+    /// 认出来的方向（台阶 25）；nil = 还没认出来
+    var axis: LongShotAxis? = nil
+    /// 对不上是因为往另一个方向滚了
+    var crossScroll = false
 }
 
 /// 盯着框里的画面：每秒最多 8 张，画面变了才会送过来。每张交给拼接算法，拼的活在后台队列里做
@@ -15,7 +20,7 @@ final class LongShotCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     static let fps: Int32 = 8
     let queue = DispatchQueue(label: "local.mackit.longshot")
     /// 只在 queue 里碰
-    private let stitcher: ScrollStitcher
+    private let stitcher: DirectionalStitcher
     private var stopped = false
     private var stream: SCStream?
     /// 在主线程上调
@@ -23,7 +28,7 @@ final class LongShotCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     var onError: (@MainActor (Error) -> Void)?
 
     init(maxHeight: Int = 30000) {
-        stitcher = ScrollStitcher(maxHeight: maxHeight)
+        stitcher = DirectionalStitcher(maxLength: maxHeight)
     }
 
     /// 开始拍。MacKit 自己的窗口（红框、控制条、预览条、贴图）都不拍进去
@@ -101,8 +106,9 @@ final class LongShotCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         case .up(let k): changed = k > 0
         default: changed = false
         }
-        let progress = LongShotProgress(event: event, totalHeight: stitcher.totalHeight, screens: stitcher.screens,
-                                        thumb: changed ? stitcher.thumbnail().flatMap(Self.makeImage) : nil)
+        let progress = LongShotProgress(event: event, totalHeight: stitcher.length, screens: stitcher.screens,
+                                        thumb: changed ? stitcher.thumbnail().flatMap(Self.makeImage) : nil,
+                                        axis: stitcher.axis, crossScroll: stitcher.crossScroll)
         DispatchQueue.main.async { MainActor.assumeIsolated { self.onProgress?(progress) } }
     }
 

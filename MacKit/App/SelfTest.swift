@@ -777,6 +777,17 @@ enum SelfTest {
         second.input.keyDown(with: key("\u{1b}", code: 53))
         let after = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
         check(tool.annotateWindow == nil && after.count == 1, "再按 Esc：不要这次画的，不多存文件")
+        // 横长图（台阶 25）：标注窗口能左右滚，从最左边开始看
+        guard let wideCtx = CGContext(data: nil, width: 12000, height: 600, bitsPerComponent: 8, bytesPerRow: 0, space: sRGB,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        wideCtx.setFillColor(CGColor(srgbRed: 0.85, green: 0.85, blue: 0.85, alpha: 1))
+        wideCtx.fill(CGRect(x: 0, y: 0, width: 12000, height: 600))
+        guard let wideImage = wideCtx.makeImage() else { return }
+        let lw = tool.annotate(wideImage, pointSize: NSSize(width: 6000, height: 300), present: false, pasteboard: pb, folder: dir)
+        check(lw.scrollView.hasHorizontalScroller && lw.visibleRect.minX == 0 && abs(lw.visibleRect.maxY - 300) < 1
+              && lw.window.frame.width < 6000, "横长图点\u{201C}标注\u{201D}：窗口能左右滚，从最左边开始看")
+        lw.input.keyDown(with: key("\u{1b}", code: 53))
+        check(tool.annotateWindow == nil, "横长图标注：Esc 关掉")
     }
 
     private static func testSelectEdit() {
@@ -2579,7 +2590,7 @@ enum SelfTest {
 
     private static func testLongShot(menu: NSMenu?) {
         let titles = menu?.items.map(\.title) ?? []
-        check(titles.contains("长截图（框选后往下滚，拼成一张长图）"), "菜单里有\u{201C}长截图\u{201D}")
+        check(titles.contains("长截图（框选后往下或往右滚，拼成一张长图）"), "菜单里有\u{201C}长截图\u{201D}")
 
         // 截图工具栏上的按钮
         let viewSize = CGSize(width: 1512, height: 982)
@@ -2699,9 +2710,70 @@ enum SelfTest {
             check(doneImage?.height == header + 50 + visible + footer && LongShotSession.active == nil, "长截图：点完成 → 交出拼好的长图")
         }
 
+        // 横向长截图（台阶 25）：把上面那张假网页转 90 度，就是一张往右滚的假表格（左边、右边各一列固定不动）
+        func frameImageH(_ o: Int) -> CGImage? {
+            grayImage(width: header + visible + footer, height: w) { x, y in
+                x < header ? headerGray(y, x) : x < header + visible ? contentGray(y, o + x - header) : footerGray(y, x - header - visible)
+            }
+        }
+        let captureH = LongShotCapture()
+        var eventsH: [ScrollStitcher.Event] = []
+        var axesH: [LongShotAxis?] = []
+        captureH.onProgress = { p in eventsH.append(p.event); axesH.append(p.axis) }
+        let offsetsH = [0, 0, 25, 60, 100, 230, 320, 410]
+        for o in offsetsH {
+            guard let img = frameImageH(o), let buffer = pixelBuffer(from: img), let frame = LongShotCapture.frame(from: buffer)
+            else { check(false, "横向长截图：造假画面"); return }
+            captureH.queue.async { captureH.process(frame) }
+        }
+        let stitchedH = awaitResult { await withCheckedContinuation { (c: CheckedContinuation<CGImage?, Never>) in
+            captureH.finish { c.resume(returning: $0) }
+        } } ?? nil
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        let lastH = offsetsH.last ?? 0
+        let expectedH: [ScrollStitcher.Event] = [.first, .same] + (2..<offsetsH.count).map { .appended(offsetsH[$0] - offsetsH[$0 - 1]) }
+        if eventsH != expectedH { info("横向长截图收到的：\(eventsH)") }
+        check(eventsH == expectedH && axesH.prefix(2) == [nil, nil] && axesH.dropFirst(2).allSatisfy { $0 == .horizontal },
+              "横向长截图：往右滚一段段接上；头两张还没认出方向，接上第一段就认成横着拼")
+        let widthH = header + lastH + visible + footer
+        var sameH = stitchedH?.width == widthH && stitchedH?.height == w
+        if sameH, let stitchedH, let px = PixelBuffer(image: stitchedH) {
+            outer: for x in 0..<widthH {
+                for y in 0..<w {
+                    let g = Int(pageGray(lastOffset: lastH, y, x))
+                    let c = px.rgb(x, y)
+                    if c.0 != g || c.1 != g || c.2 != g { sameH = false; info("横向长截图第一个不对的像素：(\(x), \(y)) \(c) ≠ \(g)"); break outer }
+                }
+            }
+        }
+        check(sameH, "横向长截图：拼出来和原表格一模一样（\(stitchedH?.width ?? 0)×\(w)，左右固定的两列各一份）")
+        if let screen = NSScreen.main {
+            let region = ScreenRegion(displayID: screen.displayID ?? CGMainDisplayID(), screenFrame: screen.frame,
+                                      viewRect: CGRect(x: 300, y: 200, width: 700, height: 400))
+            let side = LongShotSession(region: region)
+            side.onFinish = { _ in }
+            side.begin(startCapture: false, showWindows: false)
+            check(side.bar.label.stringValue.hasPrefix("往下或往右滚") && side.axis == nil && !side.preview.view.horizontal,
+                  "长截图开始：提示往下或往右滚，还没认出方向时预览条照旧竖着放在旁边")
+            side.handle(LongShotProgress(event: .appended(40), totalHeight: 1400, screens: 1.4, thumb: stitchedH, axis: .horizontal))
+            let expectedFrame = LongShotGeometry.horizontalPreviewFrame(region: region.globalRect, visible: screen.visibleFrame,
+                                                                       height: LongShotPreview.horizontalHeight, avoid: side.bar.panel.frame)
+            check(side.axis == .horizontal && side.bar.axis == .horizontal && side.preview.view.horizontal
+                  && side.preview.panel.frame == expectedFrame && side.bar.label.stringValue == "已拼约 1.4 屏　1400 像素宽"
+                  && side.bar.autoButton.toolTip?.contains("往右") == true,
+                  "认成横着拼：预览条挪到框上面横着放，进度写像素宽，自动滚动换成往右")
+            side.handle(LongShotProgress(event: .lost, totalHeight: 1400, screens: 1.4, thumb: nil, axis: .horizontal, crossScroll: true))
+            check(side.bar.isWarning && side.bar.label.stringValue.hasPrefix("横着拼的时候别上下滚"), "横着拼时上下滚：黄字提示别上下滚")
+            side.cancel()
+        }
+        let sideScroller = AutoScroller(region: CGRect(x: 100, y: 200, width: 600, height: 700), axis: .horizontal)
+        check(sideScroller.step == 36 && sideScroller.wheels.vertical == 0 && sideScroller.wheels.horizontal == AutoScroller.rightSign * 36,
+              "横着自动滚动：用滚轮左右那一路，每次 36 点（框宽的 6%；自检里不真滚）")
+
         let scroller = AutoScroller(region: CGRect(x: 100, y: 200, width: 600, height: 700))
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        check(scroller.point == CGPoint(x: 400, y: primaryHeight - 550) && scroller.step == 42 && !scroller.isRunning,
+        check(scroller.point == CGPoint(x: 400, y: primaryHeight - 550) && scroller.step == 42 && !scroller.isRunning
+              && scroller.wheels.horizontal == 0 && scroller.wheels.vertical == AutoScroller.downSign * 42,
               "自动滚动：在框的正中间滚，每次 42 点（自检里不真滚）")
 
         // 复制 + 存 PNG（私有剪贴板、临时文件夹）
@@ -2828,7 +2900,7 @@ enum SelfTest {
         check(tail.first?.title == "设置…" && tail.first?.keyEquivalent == "," && tail.first?.keyEquivalentModifierMask == .command
               && tail.last?.title == "退出 MacKit", "菜单最下面：设置…（⌘,）、退出 MacKit")
         let everything = allTitles(menu)
-        let mustHave = ["截取整个屏幕", "长截图（框选后往下滚，拼成一张长图）", "延时截图", "3 秒后截图", "贴图（剪贴板里的图片或文字）",
+        let mustHave = ["截取整个屏幕", "长截图（框选后往下或往右滚，拼成一张长图）", "延时截图", "3 秒后截图", "贴图（剪贴板里的图片或文字）",
                         "录屏（框选 / 单击窗口 / 整屏）", "识别文字（框选）", "测量（自动量宽高、拖框量大小）", "排窗口（系统自带的快捷键）",
                         "30 分钟", "关于 MacKit", "设置…", "退出 MacKit"]
         let missing = mustHave.filter { !everything.contains($0) }
@@ -3541,17 +3613,22 @@ enum LongShotSmokeTest {
                     if (v >> 7) % 3 == 0 { let i = (y * w + x) * 4; page[i] = 30; page[i + 1] = 30; page[i + 2] = 30 }
                 }
             }
-            let stitcher = ScrollStitcher()
-            var appended = 0
-            let start = Date()
-            for k in 0...12 {
+            // 用真正长截图时那一套（还没认出方向时竖着、横着各比一次）；横着的把画面先转 90 度喂进去（每张都要转，最慢）
+            let frames = (0...12).map { k -> StitchFrame in
                 let o = k * 120
-                let frame = StitchFrame(width: w, height: h, pixels: Array(page[(o * w * 4)..<((o + h) * w * 4)]))
-                if case .appended = stitcher.add(frame) { appended += 1 }
+                return StitchFrame(width: w, height: h, pixels: Array(page[(o * w * 4)..<((o + h) * w * 4)]))
             }
-            let ms = Date().timeIntervalSince(start) * 1000 / 13
-            lines.append(String(format: "速度：1600×1600 的画面拼一张平均 %.0f 毫秒（每秒 8 张要在 125 毫秒内），接上 %d/12 段", ms, appended))
-            ok = ok && ms < 125 && appended == 12 && stitcher.result()?.height == total
+            for (name, axis, input) in [("竖着", LongShotAxis.vertical, frames), ("横着", LongShotAxis.horizontal, frames.map { $0.transposed() })] {
+                let stitcher = DirectionalStitcher()
+                var appended = 0
+                let start = Date()
+                for frame in input { if case .appended = stitcher.add(frame) { appended += 1 } }
+                let ms = Date().timeIntervalSince(start) * 1000 / Double(input.count)
+                let length = axis == .horizontal ? stitcher.result()?.width : stitcher.result()?.height
+                lines.append(String(format: "速度（%@拼）：1600×1600 的画面拼一张平均 %.0f 毫秒（每秒 8 张要在 125 毫秒内），接上 %d/12 段",
+                                    name, ms, appended))
+                ok = ok && ms < 125 && appended == 12 && stitcher.axis == axis && length == total
+            }
             finish(lines, ok, resultPath)
         }
     }

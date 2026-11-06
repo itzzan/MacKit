@@ -23,8 +23,10 @@ final class LongShotSession {
     private var autoConfirmed = false
     private var autoFlipped = false
     private var watchdog: Timer?
-    /// 方向在之前的长截图里已经确认过
-    private static var directionConfirmed = false
+    /// 哪几个方向的自动滚动在之前的长截图里已经确认过
+    private static var confirmedAxes: Set<LongShotAxis> = []
+    /// 认出来往哪个方向拼（台阶 25）；nil = 还没认出来（按竖着的算）
+    private(set) var axis: LongShotAxis?
 
     init(region: ScreenRegion, maxHeight: Int = 30000) {
         self.region = region
@@ -80,20 +82,25 @@ final class LongShotSession {
     func handle(_ p: LongShotProgress) {
         guard !finished else { return }
         lastProgress = p
+        if let a = p.axis, a != axis { switchAxis(a) }
         if let thumb = p.thumb { preview.update(thumb) }
         switch p.event {
         case .first:
             break
         case .appended:
             lastAppendAt = Date()
-            if isAutoScrolling {
+            if let s = scroller, s.isRunning {
                 autoConfirmed = true
-                Self.directionConfirmed = true
+                Self.confirmedAxes.insert(s.axis)
             }
-            bar.setStatus(LongShotGeometry.progressText(totalHeight: p.totalHeight, screens: p.screens))
+            bar.setStatus(LongShotGeometry.progressText(totalHeight: p.totalHeight, screens: p.screens, axis: axis))
         case .full:
             stopAuto()
             bar.setStatus("到 3 万像素上限了，点完成", warning: true)
+        case .lost where p.crossScroll:
+            stopAuto()
+            bar.setStatus(axis == .horizontal ? "横着拼的时候别上下滚：滚回去一点，接着往右滚" : "竖着拼的时候别左右滚：滚回去一点，接着往下滚",
+                          warning: true)
         case .lost:
             if isAutoScrolling {
                 stopAuto()
@@ -106,11 +113,24 @@ final class LongShotSession {
             if isAutoScrolling, !autoConfirmed, !autoFlipped {
                 flipAuto()
             } else if k > 0, !bar.isWarning {
-                bar.setStatus(LongShotGeometry.progressText(totalHeight: p.totalHeight, screens: p.screens))
+                bar.setStatus(LongShotGeometry.progressText(totalHeight: p.totalHeight, screens: p.screens, axis: axis))
             }
         case .same, .blank:
             break
         }
+    }
+
+    /// 认出了方向：横着拼时预览条挪到框上面横着放、自动滚动换成往右
+    private func switchAxis(_ a: LongShotAxis) {
+        axis = a
+        guard a == .horizontal else { return }
+        bar.setAxis(.horizontal)
+        let screen = NSScreen.screens.first { $0.displayID == region.displayID }
+        let visible = screen?.visibleFrame ?? region.screenFrame
+        preview.setHorizontal(frame: LongShotGeometry.horizontalPreviewFrame(region: region.globalRect, visible: visible,
+                                                                             height: LongShotPreview.horizontalHeight,
+                                                                             avoid: bar.panel.frame))
+        Log.capture.notice("long shot goes horizontal")
     }
 
     // MARK: 自动滚动
@@ -129,7 +149,7 @@ final class LongShotSession {
             return
         }
         guard lastProgress?.event != .full else { return }
-        let s = AutoScroller(region: region.globalRect)
+        let s = AutoScroller(region: region.globalRect, axis: axis ?? .vertical)    // 还没认出方向：往下滚
         s.onMouseMoved = { [weak self] in
             guard let self else { return }
             self.stopAuto()
@@ -142,7 +162,7 @@ final class LongShotSession {
         autoFlipped = false
         s.start()
         bar.setAutoScrolling(true)
-        bar.setStatus("正在自动滚动，到底自动停　·　动一下鼠标就停")
+        bar.setStatus(s.axis == .horizontal ? "正在往右自动滚动，到头自动停　·　动一下鼠标就停" : "正在自动滚动，到底自动停　·　动一下鼠标就停")
         let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkAuto() }
         }
@@ -161,16 +181,17 @@ final class LongShotSession {
 
     /// 一直没有新内容：刚开始就没动 = 方向可能反了，换一次；之后还没动 = 到底了
     private func checkAuto() {
-        guard isAutoScrolling else { return }
+        guard let s = scroller, s.isRunning else { return }
         let now = Date()
-        if !autoConfirmed, !autoFlipped, !Self.directionConfirmed, now.timeIntervalSince(autoStartedAt) > 0.8 {
+        let known = Self.confirmedAxes.contains(s.axis)
+        if !autoConfirmed, !autoFlipped, !known, now.timeIntervalSince(autoStartedAt) > 0.8 {
             flipAuto()
             return
         }
         if now.timeIntervalSince(lastAppendAt) > 2 {
             stopAuto()
-            bar.setStatus(autoConfirmed || Self.directionConfirmed ? "滚到底了，点完成（或者自己再滚滚）" : "滚不动：自己滚一下试试",
-                          warning: !(autoConfirmed || Self.directionConfirmed))
+            let end = s.axis == .horizontal ? "滚到头了，点完成（或者自己再滚滚）" : "滚到底了，点完成（或者自己再滚滚）"
+            bar.setStatus(autoConfirmed || known ? end : "滚不动：自己滚一下试试", warning: !(autoConfirmed || known))
         }
     }
 
@@ -184,7 +205,7 @@ final class LongShotSession {
 
     private var lastProgressText: String {
         guard let p = lastProgress, p.totalHeight > 0, p.event != .first || p.screens > 1.01 else { return LongShotControlBar.startText }
-        return LongShotGeometry.progressText(totalHeight: p.totalHeight, screens: p.screens)
+        return LongShotGeometry.progressText(totalHeight: p.totalHeight, screens: p.screens, axis: axis)
     }
 
     // MARK: 结束

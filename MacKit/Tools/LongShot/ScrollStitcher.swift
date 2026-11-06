@@ -7,6 +7,9 @@ import Foundation
 // 和上一张拼进去的画面比，找出往下滚了几行，把新露出来的那几行接到长图下面。
 // 网页顶部固定的导航栏、聊天窗口底部的输入框不跟着滚，第一次滚动时认出来，之后比对和拼接都绕开它们，
 // 最后头尾各留一份。
+//
+// 台阶 25 横着拼：把每张画面"转 90 度"（每一列变成一行）交给同一套算法，拼好再转回来。
+// 还没认出方向时竖着、横着各拼一份，哪边先接上新内容就定成哪边（DirectionalStitcher）。
 
 /// 拍到的一张画面：每像素 4 字节，从上往下一行行紧挨着排（没有行尾填充）。
 /// 颜色顺序是 BGRA 还是 RGBA 都行：算指纹时三个颜色加在一起，拼图时原样照抄
@@ -16,6 +19,22 @@ struct StitchFrame {
     let pixels: [UInt8]
 
     var bytesPerRow: Int { width * 4 }
+
+    /// 转 90 度（沿对角线翻）：第 x 列变成第 x 行，左边的列在上面。再转一次就转回来
+    func transposed() -> StitchFrame {
+        let w = width, h = height
+        var out = [UInt8](repeating: 0, count: w * h * 4)
+        pixels.withUnsafeBytes { srcRaw in
+            out.withUnsafeMutableBytes { dstRaw in
+                let src = srcRaw.bindMemory(to: UInt32.self), dst = dstRaw.bindMemory(to: UInt32.self)
+                for y in 0..<h {
+                    let row = y * w
+                    for x in 0..<w { dst[x * h + y] = src[row + x] }
+                }
+            }
+        }
+        return StitchFrame(width: h, height: w, pixels: out)
+    }
 }
 
 /// 每一行的"指纹"：把一行切成若干段，每段取平均亮度。比两行只比指纹，快
@@ -109,13 +128,19 @@ enum ScrollMatcher {
     /// 新一张 n 相对上一张 p 滚了多少：n 的第 r 行 = p 的第 r + d 行（d > 0 是往下滚）。
     /// top、bottom：顶部、底部固定不动的行数，不参与比对
     static func move(from p: RowPrints, to n: RowPrints, top: Int, bottom: Int) -> ScrollMove {
-        guard p.rows == n.rows, p.bins == n.bins else { return .lost }
+        moveWithCost(from: p, to: n, top: top, bottom: bottom).move
+    }
+
+    /// 同上，再交出对得有多准（重叠部分平均每段的亮度差，越小越准；没滚、对不上时是 0 或无穷大）。
+    /// 认方向时，竖着、横着都对上了就挑更准的那个（台阶 25）
+    static func moveWithCost(from p: RowPrints, to n: RowPrints, top: Int, bottom: Int) -> (move: ScrollMove, cost: Float) {
+        guard p.rows == n.rows, p.bins == n.bins else { return (.lost, .infinity) }
         let start = top, end = n.rows - bottom, content = end - start
-        guard content >= 8 else { return .lost }
-        if isSame(p, n, start: start, end: end) { return .same }
+        guard content >= 8 else { return (.lost, .infinity) }
+        if isSame(p, n, start: start, end: end) { return (.same, 0) }
 
         var samples = (start..<end).filter { n.informative[$0] }
-        guard samples.count >= 6 else { return .blank }
+        guard samples.count >= 6 else { return (.blank, .infinity) }
         if samples.count > sampleLimit {
             let step = Double(samples.count) / Double(sampleLimit)
             samples = (0..<sampleLimit).map { samples[Int(Double($0) * step)] }
@@ -123,7 +148,7 @@ enum ScrollMatcher {
 
         // 第一轮：每个可能的位置都用抽出来的几十行粗比一遍
         let maxShift = content - minOverlap(content: content)
-        guard maxShift >= 1 else { return .lost }
+        guard maxShift >= 1 else { return (.lost, .infinity) }
         var coarse: [(d: Int, cost: Float)] = []
         coarse.reserveCapacity(2 * maxShift)
         for d in -maxShift...maxShift where d != 0 {
@@ -153,9 +178,9 @@ enum ScrollMatcher {
             }
             if count >= 4 { fine.append((c.d, sum / Float(count))) }
         }
-        guard let best = fine.min(by: { $0.cost < $1.cost }), best.cost <= matchTolerance else { return .lost }
+        guard let best = fine.min(by: { $0.cost < $1.cost }), best.cost <= matchTolerance else { return (.lost, .infinity) }
         let chosen = fine.filter { $0.cost <= best.cost + tieTolerance }.min { abs($0.d) < abs($1.d) } ?? best
-        return chosen.d > 0 ? .down(chosen.d) : .up(-chosen.d)
+        return (chosen.d > 0 ? .down(chosen.d) : .up(-chosen.d), chosen.cost)
     }
 
     /// 顶部、底部有多少行一点没动（固定的导航栏、输入框）。
@@ -203,6 +228,8 @@ final class ScrollStitcher {
     private(set) var thumbRows = 0
     private(set) var thumbWidth = 0
     private(set) var isFull = false
+    /// 最近一次比对对得有多准（认方向用）
+    private(set) var lastCost: Float = .infinity
 
     init(maxHeight: Int = 30000, thumbWidth: Int = 160) {
         self.maxHeight = maxHeight
@@ -234,7 +261,9 @@ final class ScrollStitcher {
         let prints = RowPrints(frame)
 
         if let bands {
-            switch ScrollMatcher.move(from: lastPrints, to: prints, top: bands.top, bottom: bands.bottom) {
+            let (move, cost) = ScrollMatcher.moveWithCost(from: lastPrints, to: prints, top: bands.top, bottom: bands.bottom)
+            lastCost = cost
+            switch move {
             case .down(let d): return append(frame, prints, d)
             case .same: return .same
             case .up(let k): return takeBack(frame, prints, k)
@@ -247,7 +276,9 @@ final class ScrollStitcher {
         if ScrollMatcher.isSame(firstPrints, prints, start: 0, end: frameHeight) { return .same }
         let found = ScrollMatcher.fixedBands(firstPrints, prints)
         if frameHeight - found.top - found.bottom < frameHeight / 4 { return .same }
-        switch ScrollMatcher.move(from: firstPrints, to: prints, top: found.top, bottom: found.bottom) {
+        let (move, cost) = ScrollMatcher.moveWithCost(from: firstPrints, to: prints, top: found.top, bottom: found.bottom)
+        lastCost = cost
+        switch move {
         case .down(let d):
             bands = found
             // 第一张整张都留着，只把底部固定的那一条去掉，之后接在它下面
@@ -336,6 +367,92 @@ final class ScrollStitcher {
     }
 }
 
+/// 长截图往哪个方向拼（台阶 25）
+enum LongShotAxis: Equatable, Hashable {
+    case vertical, horizontal
+}
+
+/// 认方向的拼接（台阶 25）：还没认出来时，每张画面竖着、横着各拼一份；哪边先接上新内容就定成哪边，另一份扔掉。
+/// 横着拼 = 把画面转 90 度交给同一套算法，拼好再转回来
+final class DirectionalStitcher {
+    private(set) var axis: LongShotAxis?
+    private var vertical: ScrollStitcher?
+    private var horizontal: ScrollStitcher?
+    /// 最近一张对得上的画面（看"对不上"是不是因为往另一个方向滚了）
+    private var lastGood: StitchFrame?
+    /// 这一张对不上，是因为往另一个方向滚了（横着拼时上下滚、竖着拼时左右滚）
+    private(set) var crossScroll = false
+
+    init(maxLength: Int = 30000, thumbWidth: Int = 160) {
+        vertical = ScrollStitcher(maxHeight: maxLength, thumbWidth: thumbWidth)
+        horizontal = ScrollStitcher(maxHeight: maxLength, thumbWidth: thumbWidth)
+    }
+
+    /// 还没认出方向时按竖着的算
+    private var active: ScrollStitcher? { axis == .horizontal ? horizontal : vertical }
+
+    /// 长图沿拼的方向有多长（竖着是高，横着是宽；像素）
+    var length: Int { active?.totalHeight ?? 0 }
+    var screens: Double { active?.screens ?? 0 }
+
+    func add(_ frame: StitchFrame) -> ScrollStitcher.Event {
+        crossScroll = false
+        let event: ScrollStitcher.Event
+        switch axis {
+        case .vertical?:
+            event = vertical?.add(frame) ?? .lost
+        case .horizontal?:
+            event = horizontal?.add(frame.transposed()) ?? .lost
+        case nil:
+            guard let v0 = vertical, let h0 = horizontal else { return .lost }
+            let v = v0.add(frame), h = h0.add(frame.transposed())
+            switch (v, h) {
+            case (.appended, .appended):
+                lock(v0.lastCost <= h0.lastCost ? .vertical : .horizontal)    // 两边都对上了：挑对得更准的
+                event = axis == .vertical ? v : h
+            case (.appended, _), (.full, _):
+                lock(.vertical)
+                event = v
+            case (_, .appended), (_, .full):
+                lock(.horizontal)
+                event = h
+            default:
+                if v == .same || h == .same { event = .same }
+                else if v == .lost { event = h }
+                else { event = v }
+            }
+        }
+        if event == .lost, let axis, let lastGood { crossScroll = Self.moved(across: axis, from: lastGood, to: frame) }
+        if event != .lost && event != .blank { lastGood = frame }
+        return event
+    }
+
+    private func lock(_ a: LongShotAxis) {
+        axis = a
+        if a == .vertical { horizontal = nil } else { vertical = nil }
+    }
+
+    /// 从 a 到 b 是不是往另一个方向滚了（拼横着的时候看上下，拼竖着的时候看左右）
+    static func moved(across axis: LongShotAxis, from a: StitchFrame, to b: StitchFrame) -> Bool {
+        let (pa, pb) = axis == .horizontal ? (RowPrints(a), RowPrints(b)) : (RowPrints(a.transposed()), RowPrints(b.transposed()))
+        let bands = ScrollMatcher.fixedBands(pa, pb)
+        switch ScrollMatcher.move(from: pa, to: pb, top: bands.top, bottom: bands.bottom) {
+        case .down, .up: return true
+        default: return false
+        }
+    }
+
+    /// 拼好的长图（横着拼的转回来）
+    func result() -> StitchFrame? {
+        axis == .horizontal ? horizontal?.result()?.transposed() : vertical?.result()
+    }
+
+    /// 预览小图（横着拼的转回来：高是预览条那么高，往右长）
+    func thumbnail() -> StitchFrame? {
+        axis == .horizontal ? horizontal?.thumbnail()?.transposed() : vertical?.thumbnail()
+    }
+}
+
 /// 要长截图的那一块屏幕
 struct ScreenRegion: Equatable {
     let displayID: CGDirectDisplayID
@@ -375,9 +492,29 @@ enum LongShotGeometry {
         return CGRect(x: 0, y: max(box.height - h, 0), width: box.width, height: h)
     }
 
-    /// 控制条上的进度："已拼约 3.2 屏　6200 像素高"
-    static func progressText(totalHeight: Int, screens: Double) -> String {
+    /// 控制条上的进度："已拼约 3.2 屏　6200 像素高"；横着拼是"像素宽"
+    static func progressText(totalHeight: Int, screens: Double, axis: LongShotAxis? = nil) -> String {
         let s = screens < 10 ? String(format: "%.1f", screens) : String(Int(screens.rounded()))
-        return "已拼约 \(s) 屏　\(totalHeight) 像素高"
+        return "已拼约 \(s) 屏　\(totalHeight) 像素\(axis == .horizontal ? "宽" : "高")"
+    }
+
+    /// 横着拼时的预览条（台阶 25）：放在框的上面、和框一样宽（至少 160）；上面放不下（或挡着控制条）就放到框和控制条下面，
+    /// 都放不下就贴着框的上边放在框里面
+    static func horizontalPreviewFrame(region: CGRect, visible: CGRect, height: CGFloat, avoid: CGRect, gap: CGFloat = 16) -> CGRect {
+        let width = min(max(region.width, 160), visible.width - 8)
+        let x = min(max(region.minX, visible.minX + 4), visible.maxX - width - 4)
+        let below = min(region.minY, avoid.isEmpty ? region.minY : avoid.minY) - gap - height
+        for y in [region.maxY + gap, max(region.maxY, avoid.maxY) + gap, below] {
+            let r = CGRect(x: x, y: y, width: width, height: height)
+            if r.minY >= visible.minY + 4, r.maxY <= visible.maxY - 4, !r.intersects(avoid), !r.intersects(region) { return r }
+        }
+        return CGRect(x: x, y: min(region.maxY, visible.maxY) - height - 8, width: width, height: height)
+    }
+
+    /// 横着拼时小图在预览条里怎么放：等高缩放；比预览条窄就靠左，比预览条宽就露出最右边（最新拼上的部分）
+    static func horizontalThumbLayout(thumbSize: CGSize, box: CGSize) -> CGRect {
+        guard thumbSize.height > 0 else { return .zero }
+        let w = thumbSize.width * box.height / thumbSize.height
+        return CGRect(x: min(box.width - w, 0), y: 0, width: w, height: box.height)
     }
 }

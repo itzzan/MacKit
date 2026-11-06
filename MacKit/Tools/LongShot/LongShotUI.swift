@@ -12,7 +12,9 @@ final class LongShotControlBar {
     private(set) var doneButton: ToolbarButton!
     private(set) var isWarning = false
 
-    static let startText = "往下滚动，MacKit 边看边拼　·　回车完成　·　Esc 取消"
+    static let startText = "往下或往右滚，MacKit 边看边拼　·　回车完成　·　Esc 取消"
+    /// 认出来往哪个方向拼（台阶 25）：自动滚动的图标、提示跟着变
+    private(set) var axis: LongShotAxis = .vertical
 
     init() {
         panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -31,7 +33,7 @@ final class LongShotControlBar {
         label.textColor = Theme.text
         label.lineBreakMode = .byTruncatingTail
         label.translatesAutoresizingMaskIntoConstraints = false
-        label.widthAnchor.constraint(equalToConstant: 330).isActive = true
+        label.widthAnchor.constraint(equalToConstant: 360).isActive = true
         autoButton = ToolbarButton(symbol: "arrow.down.circle", title: "自动滚动", tip: "MacKit 替你往下滚，到底自动停",
                                    width: 108) { [weak self] in self?.onAuto?() }
         let cancel = ToolbarButton(symbol: "xmark", tip: "取消（Esc）") { [weak self] in self?.onCancel?() }
@@ -53,8 +55,15 @@ final class LongShotControlBar {
     }
 
     func setAutoScrolling(_ on: Bool) {
-        autoButton.setSymbol(on ? "stop.circle" : "arrow.down.circle", tip: on ? "停下来，自己滚" : "MacKit 替你往下滚，到底自动停")
+        let idle = axis == .horizontal ? ("arrow.right.circle", "MacKit 替你往右滚，到头自动停") : ("arrow.down.circle", "MacKit 替你往下滚，到底自动停")
+        autoButton.setSymbol(on ? "stop.circle" : idle.0, tip: on ? "停下来，自己滚" : idle.1)
         autoButton.setTitle(on ? "停止滚动" : "自动滚动")
+    }
+
+    /// 横着拼了：自动滚动换成往右
+    func setAxis(_ a: LongShotAxis) {
+        axis = a
+        setAutoScrolling(false)
     }
 
     /// 放在框的下方、右对齐；下面放不下就放上面
@@ -69,10 +78,12 @@ final class LongShotControlBar {
     func close() { panel.orderOut(nil) }
 }
 
-/// 框旁边的预览条：拼好的长图缩小了竖着放，长了就露出最新拼上的那一截
+/// 框旁边的预览条：拼好的长图缩小了竖着放，长了就露出最新拼上的那一截。
+/// 横着拼时（台阶 25）换到框的上面横着放，最新拼上的在右边
 @MainActor
 final class LongShotPreview {
     static let width: CGFloat = 110
+    static let horizontalHeight: CGFloat = 90
     let panel: NSPanel
     let view = LongShotThumbView()
 
@@ -98,12 +109,21 @@ final class LongShotPreview {
         view.needsDisplay = true
     }
 
+    /// 横着拼了：挪到 frame（框的上面），小图横着放
+    func setHorizontal(frame: CGRect) {
+        panel.setFrame(frame, display: true)
+        view.horizontal = true
+        view.needsDisplay = true
+    }
+
     func show() { panel.orderFrontRegardless() }
     func close() { panel.orderOut(nil) }
 }
 
 final class LongShotThumbView: NSView {
     var image: CGImage?
+    /// 横着拼：等高缩放，露出最右边
+    var horizontal = false
     static let inset: CGFloat = 5
 
     override func draw(_ dirtyRect: NSRect) {
@@ -123,7 +143,9 @@ final class LongShotThumbView: NSView {
             ("预览" as NSString).draw(at: CGPoint(x: box.minX + 4, y: box.maxY - 18), withAttributes: attrs)
             return
         }
-        let layout = LongShotGeometry.thumbLayout(thumbSize: CGSize(width: image.width, height: image.height), box: box.size)
+        let size = CGSize(width: image.width, height: image.height)
+        let layout = horizontal ? LongShotGeometry.horizontalThumbLayout(thumbSize: size, box: box.size)
+            : LongShotGeometry.thumbLayout(thumbSize: size, box: box.size)
         ctx.saveGState()
         ctx.clip(to: box)
         ctx.interpolationQuality = .medium
@@ -139,6 +161,10 @@ final class AutoScroller {
     static let interval: TimeInterval = 0.05
     /// 哪个方向是往下（合成的滚轮事件一般负数是往下；不对的话长截图会话会反过来，记住下次用）
     static var downSign: Int32 = -1
+    /// 横着拼时哪个方向是往右（台阶 25，同样不对就反过来、记住）
+    static var rightSign: Int32 = -1
+    /// 往哪个方向滚：竖着用滚轮的上下那一路，横着用左右那一路
+    let axis: LongShotAxis
     private(set) var isRunning = false
     private var timer: Timer?
     /// 框的中心：CG 全局坐标（左上原点），发事件用
@@ -149,11 +175,18 @@ final class AutoScroller {
     let step: Int32
     var onMouseMoved: (() -> Void)?
 
-    init(region: CGRect) {
+    init(region: CGRect, axis: LongShotAxis = .vertical) {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? region.maxY
         cocoaPoint = CGPoint(x: region.midX, y: region.midY)
         point = CGPoint(x: region.midX, y: primaryHeight - region.midY)
-        step = Int32(max(4, min(80, region.height * 0.06)))       // 大约每秒滚 1.2 个框高
+        self.axis = axis
+        let length = axis == .horizontal ? region.width : region.height
+        step = Int32(max(4, min(80, length * 0.06)))              // 大约每秒滚 1.2 个框高（横着是框宽）
+    }
+
+    /// 每一下发的滚轮：(上下那一路, 左右那一路)（自检看这个，不真发）
+    var wheels: (vertical: Int32, horizontal: Int32) {
+        axis == .horizontal ? (0, Self.rightSign * step) : (Self.downSign * step, 0)
     }
 
     static var hasPermission: Bool { AXIsProcessTrusted() }
@@ -175,7 +208,9 @@ final class AutoScroller {
         timer = nil
     }
 
-    func flipDirection() { Self.downSign = -Self.downSign }
+    func flipDirection() {
+        if axis == .horizontal { Self.rightSign = -Self.rightSign } else { Self.downSign = -Self.downSign }
+    }
 
     private func tick() {
         let m = NSEvent.mouseLocation
@@ -184,8 +219,9 @@ final class AutoScroller {
             onMouseMoved?()
             return
         }
-        let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
-                            wheel1: Self.downSign * step, wheel2: 0, wheel3: 0)
+        let w = wheels
+        let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: axis == .horizontal ? 2 : 1,
+                            wheel1: w.vertical, wheel2: w.horizontal, wheel3: 0)
         event?.location = point
         event?.post(tap: .cghidEventTap)
     }

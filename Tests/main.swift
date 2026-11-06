@@ -363,6 +363,65 @@ check(LongShotGeometry.thumbLayout(thumbSize: CGSize(width: 160, height: 1000), 
 check(LongShotGeometry.progressText(totalHeight: 6200, screens: 3.18) == "已拼约 3.2 屏　6200 像素高"
       && LongShotGeometry.progressText(totalHeight: 30000, screens: 13.4) == "已拼约 13 屏　30000 像素高", "长截图：进度文字")
 
+// MARK: 横向长截图（台阶 25）
+let tf = pageFrame(offset: 37)
+let tft = tf.transposed()
+check(tft.width == tf.height && tft.height == tf.width && tft.transposed().pixels == tf.pixels
+      && tft.pixels[(5 * tf.height + 9) * 4] == tf.pixels[(9 * tf.width + 5) * 4], "转 90 度：宽高对调，第 x 列变成第 x 行，再转一次就转回来")
+let shiftCost = ScrollMatcher.moveWithCost(from: RowPrints(pageFrame(offset: 0)), to: RowPrints(pageFrame(offset: 13)), top: headerH, bottom: footerH)
+check(shiftCost.move == .down(13) && shiftCost.cost < 0.01, "比对时交出对得多准：一模一样的就是 0")
+let sideways = DirectionalStitcher(thumbWidth: 32)
+var wideEvents: [ScrollStitcher.Event] = []
+for offset in [0, 0, 13, 37, 60, 45, 90, 150, 210] { wideEvents.append(sideways.add(pageFrame(offset: offset).transposed())) }
+let wideExpected = StitchFrame(width: pageW, height: headerH + 210 + visibleH + footerH, pixels: expectedPage(lastOffset: 210)).transposed()
+check(sideways.axis == .horizontal && wideEvents == [.first, .same, .appended(13), .appended(24), .appended(23), .up(15), .appended(45), .appended(60), .appended(60)],
+      "横着滚：认成横着拼，一段段接上，往回滚就退回去")
+check(sideways.result()?.width == wideExpected.width && sideways.result()?.height == wideExpected.height && sideways.result()?.pixels == wideExpected.pixels,
+      "横着拼出来和原表格一模一样（左边固定的一列、右边固定的一列各一份）")
+check(sideways.thumbnail()?.height == 32 && sideways.length == wideExpected.width, "横着拼：预览小图转回来是横着的；长度是宽")
+let downward = DirectionalStitcher()
+for offset in [0, 13, 37] { _ = downward.add(pageFrame(offset: offset)) }
+check(downward.axis == .vertical && downward.result()?.height == headerH + 37 + visibleH + footerH, "往下滚：还是竖着拼")
+func gridFrame(ox: Int, oy: Int, w: Int = 120, h: Int = 90) -> StitchFrame {
+    var px: [UInt8] = []
+    px.reserveCapacity(w * h * 4)
+    for y in 0..<h {
+        for x in 0..<w {
+            var v = UInt32(truncatingIfNeeded: ((ox + x) / 3) &* 104729 &+ ((oy + y) / 5) &* 7919)
+            v = (v ^ (v >> 13)) &* 1274126177
+            let g: UInt8 = (v >> 7) % 3 == 0 ? 40 : 245
+            px += [g, g, g, 255]
+        }
+    }
+    return StitchFrame(width: w, height: h, pixels: px)
+}
+let gridH = DirectionalStitcher()
+let gridEvents = [gridH.add(gridFrame(ox: 0, oy: 0)), gridH.add(gridFrame(ox: 20, oy: 0))]
+let crossH = gridH.add(gridFrame(ox: 20, oy: 15))
+let crossHFlag = gridH.crossScroll
+check(gridEvents == [.first, .appended(20)] && gridH.axis == .horizontal && crossH == .lost && crossHFlag
+      && gridH.add(gridFrame(ox: 40, oy: 0)) == .appended(20) && !gridH.crossScroll,
+      "先横着接上了：再上下滚不拼，认得出是往另一个方向滚了；滚回来接着拼")
+let gridV = DirectionalStitcher()
+_ = gridV.add(gridFrame(ox: 0, oy: 0))
+_ = gridV.add(gridFrame(ox: 0, oy: 20))
+let crossV = gridV.add(gridFrame(ox: 15, oy: 20))
+check(gridV.axis == .vertical && crossV == .lost && gridV.crossScroll, "先竖着接上了：再左右滚不拼，认得出是往另一个方向滚了")
+let hVisible = CGRect(x: 0, y: 0, width: 1728, height: 1080)
+check(LongShotGeometry.horizontalPreviewFrame(region: CGRect(x: 200, y: 200, width: 900, height: 400), visible: hVisible, height: 90,
+                                              avoid: CGRect(x: 500, y: 140, width: 600, height: 40))
+      == CGRect(x: 200, y: 616, width: 900, height: 90), "横着拼：预览条在框上面，和框一样宽")
+check(LongShotGeometry.horizontalPreviewFrame(region: CGRect(x: 200, y: 600, width: 900, height: 460), visible: hVisible, height: 90,
+                                              avoid: CGRect(x: 500, y: 540, width: 600, height: 40))
+      == CGRect(x: 200, y: 434, width: 900, height: 90), "框顶到屏幕上边：预览条放到框和控制条下面")
+check(LongShotGeometry.horizontalPreviewFrame(region: hVisible, visible: hVisible, height: 90, avoid: CGRect(x: 1100, y: 20, width: 600, height: 40))
+      == CGRect(x: 4, y: 982, width: 1720, height: 90), "框占满整屏：预览条贴着框的上边放在框里")
+check(LongShotGeometry.horizontalThumbLayout(thumbSize: CGSize(width: 100, height: 160), box: CGSize(width: 300, height: 80))
+      == CGRect(x: 0, y: 0, width: 50, height: 80)
+      && LongShotGeometry.horizontalThumbLayout(thumbSize: CGSize(width: 1000, height: 160), box: CGSize(width: 300, height: 80))
+      == CGRect(x: -200, y: 0, width: 500, height: 80), "横着拼：小图等高缩放，窄就靠左，宽就露出最右边")
+check(LongShotGeometry.progressText(totalHeight: 6200, screens: 3.18, axis: .horizontal) == "已拼约 3.2 屏　6200 像素宽", "横着拼的进度写像素宽")
+
 // MARK: 系统状态、防休眠的文字
 check(SystemText.size(312_000_000_000, decimal: true) == "312 GB" && SystemText.size(1_200_000, decimal: true) == "1.2 MB"
       && SystemText.size(80_400, decimal: true) == "80 KB" && SystemText.size(999, decimal: true) == "999 B",
