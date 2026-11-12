@@ -76,6 +76,9 @@ final class ClipboardPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate
         window.hasShadow = true
         window.isReleasedWhenClosed = false
         window.hidesOnDeactivate = false
+        // 别跟着"隐藏 MacKit"一起藏：关掉识别结果这类窗口时 MacKit 会把自己藏起来交还焦点，
+        // 小窗口要是那一刻被藏着，再关它就不算数，系统下次又把它放回来，成了关不掉的空壳（11-09 你碰到的）
+        window.canHide = false
         window.animationBehavior = .none
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         window.delegate = self
@@ -212,6 +215,12 @@ final class ClipboardPanel: NSObject, NSTableViewDataSource, NSTableViewDelegate
         Self.visible = nil
         window.orderOut(nil)
         if returnFocus, NSApp.isActive, NSApp.modalWindow == nil { NSApp.hide(nil) }
+    }
+
+    /// 不管现在登记的是不是它，都收起来（开新的小窗口之前把旧的收干净）
+    func forceClose() {
+        if Self.visible === self { Self.visible = nil }
+        window.orderOut(nil)
     }
 
     func windowDidResignKey(_ notification: Notification) {

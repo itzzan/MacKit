@@ -1699,6 +1699,13 @@ enum SelfTest {
         func enter() { _ = panel.control(panel.searchField, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:))) }
         func favorite(_ item: ClipboardItem) -> ClipboardItem? { store.items.first { $0.id == item.id } }
 
+        // 11-09 修：关掉识别结果窗口时 MacKit 藏起自己，小窗口跟着被藏、再关不算数 → 关不掉
+        check(!panel.window.canHide, "剪贴板小窗口不跟着\u{201C}隐藏 MacKit\u{201D}一起藏（藏着时关掉会被系统放回来，关不掉）")
+        let stray = tool.makePanel()
+        stray.show(near: CGPoint(x: 400, y: 400), present: false)
+        stray.forceClose()
+        check(ClipboardPanel.visible == nil && !stray.window.isVisible, "旧的小窗口能强制收掉（开新的之前先收旧的）")
+        panel.show(near: CGPoint(x: 400, y: 400), present: false)
         // ⌘G → 新建分组…：还没收藏的先收藏，再放进新组
         check(ClipboardPanel.footerText.contains("⌘G 分组") && ClipboardPanel.footerText.contains("⌘T 改格式粘贴"),
               "小窗口下面的提示里有 ⌘G 分组、⌘T 改格式粘贴")
@@ -3014,6 +3021,18 @@ enum SelfTest {
         check(WhatsNew.message(for: "2.0.0").hasPrefix("MacKit 2.0 装好了") && whatsNew.frame.width < 760 && !whatsNew.isVisible
               && AppLinks.releaseNotes("2.0.0").absoluteString == "https://github.com/itzzan/MacKit/releases/tag/v2.0.0",
               "提示条写着\u{201C}MacKit 2.0 装好了\u{201D}，\u{201C}看看都有什么\u{201D}打开 GitHub 上 2.0 的更新说明（\(Int(whatsNew.frame.width)) 点宽）")
+        // 台阶 26：从 2.x 升到 3.0 弹一次（写上新东西和"这一次要重给权限"），3.0 以后的小更新不弹
+        check(WhatsNew.shouldShow(firstLaunch: .nothing, lastVersion: "2.7.0", current: "3.0.0")
+              && !WhatsNew.shouldShow(firstLaunch: .nothing, lastVersion: "3.0.0", current: "3.0.1")
+              && !WhatsNew.shouldShow(firstLaunch: .nothing, lastVersion: "3.0.0", current: "3.1.0")
+              && !WhatsNew.shouldShow(firstLaunch: .welcome, lastVersion: nil, current: "3.0.0"),
+              "从 2.x 升到 3.0：第一次打开弹一次；3.0.1、3.1 不弹；新用户不弹")
+        let whatsNew3 = Toast.makeActionsPanel(WhatsNew.message(for: "3.0.0"), actions: [("看看都有什么", {})])
+        check(WhatsNew.message(for: "3.0.0").hasPrefix("MacKit 3.0 装好了：标注能多选、长截图能横着拼")
+              && WhatsNew.message(for: "3.0.0").contains("以后更新就不用了") && WhatsNew.message(for: "2.0.0").hasPrefix("MacKit 2.0 装好了")
+              && whatsNew3.frame.width < 820 && !whatsNew3.isVisible
+              && AppLinks.releaseNotes("3.0.0").absoluteString == "https://github.com/itzzan/MacKit/releases/tag/v3.0.0",
+              "3.0 的提示条：写着新东西和这一次要重给权限，两行（\(Int(whatsNew3.frame.width)) 点宽），\u{201C}看看都有什么\u{201D}打开 3.0 的更新说明")
         let parts = AppInfo.version.split(separator: ".").compactMap { Int($0) }
         check(parts.count == 3 && parts[0] >= 1, "版本号是三段数字、1 以上：\(AppInfo.version)")
     }

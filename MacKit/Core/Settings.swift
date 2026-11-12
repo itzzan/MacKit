@@ -476,6 +476,10 @@ enum WhatsNew {
 
     static func message(for version: String) -> String {
         let major = AppVersion.parts(version).first ?? 2
+        if major >= 3 {        // 台阶 26：换了签名，从 2.x 升上来这一次要重给权限
+            return "MacKit \(major).0 装好了：标注能多选、长截图能横着拼、录屏能自动推近、剪贴板能分组、测量能量间距\n"
+                + "这一次要重新打开屏幕录制、辅助功能权限，以后更新就不用了"
+        }
         return "MacKit \(major).0 装好了：截图能美化、剪贴板能收藏、设置都在菜单最下面"
     }
 }

@@ -4,3 +4,7 @@ build/
 MacKit.xcodeproj/
 # 本机私有设置（团队编号）
 Config/Local.xcconfig
+# 签名证书、密钥的备份千万别进仓库（台阶 26）
+*.p12
+*.cer
+*.certSigningRequest

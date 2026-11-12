@@ -66,6 +66,9 @@ final class ClipboardTool: ToolModule {
             return
         }
         guard SelectionSession.active == nil, MeasureSession.active == nil else { return }    // 截图、测量中不弹
+        // 开新的之前，把旧的小窗口（万一还在屏幕上）都收掉，屏幕上最多只有一个
+        panel?.forceClose()
+        for w in NSApp.windows where w is ClipboardPanelWindow && w.isVisible { w.orderOut(nil) }
         let p = makePanel()
         panel = p
         p.show(near: NSEvent.mouseLocation)
